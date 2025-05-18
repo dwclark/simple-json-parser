@@ -97,4 +97,10 @@
   (with-open-file (fstream (get-test-resource "quiz.json"))
     (let ((parsed (decode fstream)))
       (is (string= "12" (gethash "answer" (gethash "q1" (gethash "maths" (gethash "quiz" parsed))))))
-      (is (string= "4" (gethash "answer" (gethash "q2" (gethash "maths" (gethash "quiz" parsed)))))))))
+      (is (string= "4" (gethash "answer" (gethash "q2" (gethash "maths" (gethash "quiz" parsed))))))))
+
+  (with-open-file (fstream (get-test-resource "constants.json"))
+    (let ((parsed (decode fstream)))
+      (is (eq :null (gethash "null" parsed)))
+      (is (eq :true (gethash "true" parsed)))
+      (is (eq :false (gethash "false" parsed))))))
