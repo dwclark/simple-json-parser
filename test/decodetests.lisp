@@ -6,6 +6,11 @@
 (def-suite sjp-tests)
 (in-suite sjp-tests)
 
+(defparameter *resources* (asdf:system-relative-pathname "simple-json-parser-tests" "test/resources"))
+
+(defun get-test-resource (s)
+  (format nil "~A/~A" *resources* s))
+  
 (test test-decode-constants
   (is (eq :true (decode "true")))
   (is (eq :false (decode "false")))
@@ -17,10 +22,10 @@
   (is (equalp 1e10 (decode "1e10")))
   (is (equalp 1.2e10 (decode "1.2e10")))
   (is (equalp 1.2e10 (decode "1.2e+10")))
-  (is (= 1.257 (decode "1.257")))
-  (is (= 1.245e-9 (decode "12.45e-10")))
-  (is (= 1.783456e-10 (decode "178.3456e-12")))
-  (is (= -1.783456e-10 (decode "-178.3456e-12")))
+  (is (= 1.257 (coerce (decode "1.257") 'single-float)))
+  (is (= 1.245d-9 (decode "12.45e-10")))
+  (is (= 1.783456e-10 (coerce (decode "178.3456e-12") 'single-float)))
+  (is (= -1.783456e-10 (coerce (decode "-178.3456e-12") 'single-float)))
   (is (zerop (decode "0")))
   (is (zerop (decode "-0"))))
 
@@ -58,3 +63,38 @@
   (is (expected-hash-table-p '(("foo" . 1)) (decode "{ \"foo\": 1 }")))
   (is (expected-hash-table-p '(("foo" . #(1 2 3)) ("1" . ("key" . 100)))
 			     (decode "{ \"foo\": [1,2,3], \"1\": { \"key\": 100 } }"))))
+
+
+(test test-file-parsing
+  (with-open-file (fstream (get-test-resource "large1.json"))
+    (let ((parsed (decode fstream)))
+      (flet ((correct-p (table)
+	       (and (= 22 (hash-table-count table))
+		    (= 3 (length (gethash "friends" table))))))
+	(is (every #'correct-p parsed)))))
+
+  (flet ((correct-p (table)
+	   (every #'(lambda (key)
+		      (multiple-value-bind (key present) (gethash key table)
+			present))
+		  '("name" "language" "id" "bio" "version"))))
+
+    (loop for file in '("128KB.json" "128KB-min.json")
+	  do (with-open-file (fstream (get-test-resource "128KB.json"))
+	       (let ((parsed (decode fstream)))
+		 (is (vectorp parsed))
+		 (is (= 788 (length parsed)))
+		 (is (every #'correct-p parsed))))))
+
+  (with-open-file (fstream (get-test-resource "fruit.json"))
+    (let ((parsed (decode fstream)))
+      (flet ((correct-p (cell)
+	       (string= (cdr cell) (gethash (car cell) parsed))))
+	(is (hash-table-p parsed))
+	(is (= 3 (hash-table-count parsed)))
+	(is (every #'correct-p '(("fruit" . "Apple") ("size" . "Large") ("color" . "Red")))))))
+
+  (with-open-file (fstream (get-test-resource "quiz.json"))
+    (let ((parsed (decode fstream)))
+      (is (string= "12" (gethash "answer" (gethash "q1" (gethash "maths" (gethash "quiz" parsed))))))
+      (is (string= "4" (gethash "answer" (gethash "q2" (gethash "maths" (gethash "quiz" parsed)))))))))

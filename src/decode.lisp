@@ -65,8 +65,8 @@
       (:null (expect "null")))
     type))
 
-;; if more than 8 digits of precision are required, go with double float
-;; if <= 8, then keep single float
+;; strategy, if has a decimal point or exponential, treat it like a double float
+;; otherwise, thread it like an integer
 (defun decode-number ()
   (flet ((parse-digits ()
 	   (clear-buffer)
@@ -78,11 +78,11 @@
 				     nil)))))
     (let ((sign-mantissa #\+)
 	  (whole 0)
+	  (has-fractional nil)
 	  (fractional 0)
 	  (has-exponent nil)
 	  (sign-exponent #\+)
-	  (exponent 0)
-	  (accum 0))
+	  (exponent 0))
       (if (eql #\- *current*)
 	  (progn
 	    (setf sign-mantissa #\-)
@@ -93,12 +93,14 @@
 	  (json-error "no whole digits")) 
       
       (if (eql #\. *current*)
-	  (let ((tmp 0))
+	  (progn
 	    (move-next)
-	    (setf tmp (parse-digits))
-	    (if (null tmp)
-		(json-error "no fractional digits"))
-	    (setf fractional (float (/ tmp (expt 10 (length *buffer*)))))))
+	    (setf fractional (parse-digits))
+	    (if (null fractional)
+		(json-error "no fractional digits")
+		(progn
+		  (setf has-fractional t)
+		  (setf fractional (coerce (/ fractional (expt 10 (length *buffer*))) 'double-float))))))
       
       (if (or (eql #\e *current*) (eql #\E *current*))
 	  (progn
@@ -111,15 +113,18 @@
 	    (if (null exponent)
 		(json-error "no exponent-digits"))))
       
-      (setf accum whole)
-      (incf accum fractional)
-      (if has-exponent
-	  (setf accum (* accum (expt 10 (if (char= #\+ sign-exponent)
-					    exponent
-					    (- exponent))))))
-      (if (char= #\+ sign-mantissa)
-	  accum
-	  (- accum)))))
+      (if (and (not has-fractional) (not has-exponent))
+	  whole
+	  (let ((accum (coerce whole 'double-float)))
+	    (if has-fractional
+		(incf accum fractional))
+	    (if has-exponent
+		(setf accum (* accum (expt 10 (if (char= #\+ sign-exponent)
+						  exponent
+						  (- exponent))))))
+	    (if (char= #\+ sign-mantissa)
+		accum
+		(- accum)))))))
 
 (defun decode-string ()
   (move-next)
