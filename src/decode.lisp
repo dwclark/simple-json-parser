@@ -11,12 +11,22 @@
 (defparameter *column* 0)
 (defparameter *level* 0)
 (defparameter *buffer* nil)
+(defparameter *hex-buffer* nil)
 
 (defun clear-buffer ()
   (setf (fill-pointer *buffer*) 0))
 
 (defun add-buffer (c)
   (vector-push-extend c *buffer*))
+
+(defun hex-code ()
+  (loop for idx from 0 to 3
+	do (if (and *current* (digit-char-p *current* 16))
+	       (progn
+		 (setf (aref *hex-buffer* idx) *current*)
+		 (move-next))
+	       (json-error "expecting hex digit"))
+	finally (return (parse-integer *hex-buffer* :radix 16))))
 
 (defun json-error (msg)
   (error (format nil "At line ~A, column ~A: ~A~%" *line* *column* msg)))
@@ -33,6 +43,7 @@
       (case *current*
 	((#\Space #\Tab #\Return #\Linefeed) :whitespace)
 	(#\, :comma)
+	(#\: :colon)
 	((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) :number)
 	(#\" :string)
 	(#\{ :object)
@@ -54,6 +65,8 @@
       (:null (expect "null")))
     type))
 
+;; if more than 8 digits of precision are required, go with double float
+;; if <= 8, then keep single float
 (defun decode-number ()
   (flet ((parse-digits ()
 	   (clear-buffer)
@@ -109,45 +122,82 @@
 	  (- accum)))))
 
 (defun decode-string ()
-  (flet ((hex-code ()
-	   (loop with hex-buffer = (make-array 4 :element-type 'character)
-		 for idx from 0 to 3
-		 do (if (and *current* (digit-char-p *current* 16))
-			(progn
-			  (setf (aref hex-buffer idx) *current*)
-			  (move-next))
-			(json-error "expecting hex digit"))
-		 finally (return (parse-integer hex-buffer :radix 16)))))
-    (move-next)
-    (clear-buffer)
-    (loop while (and *current* (not (char= #\" *current*)))
-	  do (case *current*
-	       (#\\
-		(move-next)
-		(if (null *current*)
-		    (json-error "expecting char"))
-		(case *current*
-		  (#\" (add-buffer #\") (move-next))
-		  (#\\ (add-buffer #\\) (move-next))
-		  (#\/ (add-buffer #\/) (move-next))
-		  (#\b (add-buffer #\Backspace) (move-next))
-		  (#\f (add-buffer #\Formfeed) (move-next))
-		  (#\n (add-buffer #\Linefeed) (move-next))
-		  (#\r (add-buffer #\Return) (move-next))
-		  (#\t (add-buffer #\Tab) (move-next))
-		  (#\u (move-next) (add-buffer (code-char (hex-code))))
-		  (otherwise (json-error "expected special char sequence"))))
-	       (otherwise (add-buffer *current*) (move-next))))
-    
-    (if (null *current*)
-	(json-error "expected \" character, got eof"))
-    
-    (move-next)
-    (copy-seq *buffer*)))
+  (move-next)
+  (clear-buffer)
+  (loop while (and *current* (not (char= #\" *current*)))
+	do (case *current*
+	     (#\\
+	      (move-next)
+	      (if (null *current*)
+		  (json-error "expecting char"))
+	      (case *current*
+		(#\" (add-buffer #\") (move-next))
+		(#\\ (add-buffer #\\) (move-next))
+		(#\/ (add-buffer #\/) (move-next))
+		(#\b (add-buffer #\Backspace) (move-next))
+		(#\f (add-buffer #\Formfeed) (move-next))
+		(#\n (add-buffer #\Linefeed) (move-next))
+		(#\r (add-buffer #\Return) (move-next))
+		(#\t (add-buffer #\Tab) (move-next))
+		(#\u (move-next) (add-buffer (code-char (hex-code))))
+		(otherwise (json-error "expected special char sequence"))))
+	     (otherwise (add-buffer *current*) (move-next))))
+  
+  (if (null *current*)
+      (json-error "expected \" character, got eof"))
+  
+  (move-next)
+  (copy-seq *buffer*))
 
-(defun decode-array ())
+(defun decode-array ()
+  (move-next)
+  (skip-whitespace)
+  (loop with ary = (make-array 0 :adjustable t :fill-pointer 0)
+	while (and *current* (not (char= #\] *current*)))
+	do (vector-push-extend (decode-stream) ary)
+	   (skip-whitespace)
+	   (if (null *current*)
+	       (json-error "expecting ',' or ']' got eof"))
+	   (case *current*
+	     (#\,
+	      (move-next)
+	      (skip-whitespace)
+	      (if (null *current*)
+		  (json-error (format nil "expecting array element got ~A" *current*)))
+	      (if (char= #\] *current*)
+		  (json-error "expecting array element got ']'")))
+	     (#\] nil)
+	     (otherwise (json-error "expecting legal json element")))
+	finally (return (progn (move-next) ary))))
 
-(defun decode-object ())
+(defun decode-object ()
+  (move-next)
+  (skip-whitespace)
+  (loop with table = (make-hash-table :test #'equal)
+	with current-key = nil
+	with current-val = nil
+	while (and *current* (not (char= #\} *current*)))
+	do (skip-whitespace)
+	   (if (not (eq :string (type-from-char)))
+	       (json-error (format nil "expecting '\"' but got ~A" *current*)))
+	   (setf current-key (decode-string))
+	   (skip-whitespace)
+	   (if (null *current*)
+	       (json-error "expecting ':' but got eof"))
+	   (if (not (eq :colon (type-from-char)))
+	       (json-error (format nil "expecting ':' but got ~A" *current*)))
+	   (move-next)
+	   (setf current-val (decode-stream))
+	   (setf (gethash current-key table) current-val)
+	   (skip-whitespace)
+	   (if (null *current*)
+	       (json-error "expecting ',' or '}' but got eof"))
+	   (case *current*
+	     (#\, (move-next))
+	     (#\} nil)
+	     (otherwise (json-error (format nil "expecting ',' or '}' but got ~A" *current*))))
+	finally (return (progn (move-next) table))))
+	   
 
 (defun skip-whitespace ()
   (loop while (eq :whitespace (type-from-char))
@@ -162,7 +212,8 @@
 		(:number (decode-number))
 		(:object (decode-object))
 		(:array (decode-array))
-		((:true :false :null) (decode-constant type)))))
+		((:true :false :null) (decode-constant type))
+		(otherwise (json-error (format nil "illegal character ~A" *current*))))))
     (decf *level*)
     (if (= 0 *level*)
 	(progn
@@ -178,7 +229,8 @@
 		  (*line* 1)
 		  (*column* 0)
 		  (*level* 0)
-		  (*buffer* (make-array 1 :element-type 'character :adjustable t :fill-pointer 0)))
+		  (*buffer* (make-array 1 :element-type 'character :adjustable t :fill-pointer 0))
+		  (*hex-buffer* (make-array 4 :element-type 'character)))
 	      (decode-stream)))
     (string (with-input-from-string (stm source)
 	      (decode stm)))))

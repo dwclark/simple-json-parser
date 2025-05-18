@@ -29,5 +29,32 @@
   (is (string= (decode "\"fo\\no\"") (make-array 4 :element-type 'character :initial-contents '(#\f #\o #\Linefeed #\o))))
   (is (string= (decode "\"t\\tab\"") (make-array 4 :element-type 'character :initial-contents '(#\t #\Tab #\a #\b))))
   (is (string= "foo" (decode "\"\\u0066\\u006f\\u006f\"")))
-  (is (string= "foo" (decode "\"\\u0066\\u006F\\u006F\"")))
-  )
+  (is (string= "foo" (decode "\"\\u0066\\u006F\\u006F\""))))
+
+(test test-decode-array
+  (is (equalp #() (decode "[]")))
+  (is (equalp #() (decode "[         ]")))
+  (is (equalp #(1 2 3) (decode "[1,2,3]")))
+  (is (equalp #(1 2 3) (decode "[ 1  ,2   ,   3]")))
+  (is (equalp #(1 2 #(3 4)) (decode "[1,2,[3,4]]")))
+  (is (equalp #(1 2 #(3 4)) (decode "[1  ,   2,[    3,   4    ]]")))
+  (is (equalp #("foo") (decode "[\"foo\"]")))
+  (is (equalp #(" fo  o") (decode "[   \" fo  o\"    ]")))
+  (is (equalp #(1 "two" #("buckle" 3) 4) (decode "[1, \"two\", [ \"buckle\" , 3  ], 4]"))))
+
+(defun expected-hash-table-p (list table)
+  (loop for (key . val) in list
+	do (let ((hval (gethash key table)))
+	     (cond
+	       ((hash-table-p hval)
+		(if (not (expected-hash-table-p (list val) hval))
+		    (return-from expected-hash-table-p nil)))
+	       (t (if (not (equalp val hval))
+		      (return-from expected-hash-table-p nil)))))
+	finally (return t)))
+
+(test test-decode-object
+  (is (expected-hash-table-p '() (decode "{}")))
+  (is (expected-hash-table-p '(("foo" . 1)) (decode "{ \"foo\": 1 }")))
+  (is (expected-hash-table-p '(("foo" . #(1 2 3)) ("1" . ("key" . 100)))
+			     (decode "{ \"foo\": [1,2,3], \"1\": { \"key\": 100 } }"))))
