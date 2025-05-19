@@ -7,6 +7,17 @@
 (defparameter *pretty* nil)
 (defparameter *indent* 2)
 (defparameter *level* 0)
+
+(defun char-out (c)
+  (write-char c *target*))
+
+(defun str-out (s)
+  (write-string s *target*))
+
+(defun fmt-out (template obj)
+  (format *target* template obj))
+
+(defun pretty-indent ()
   (if (and *pretty* (not (zerop *level*)))
       (loop for idx from 0 to (* *level* *indent*)
 	    do (char-out #\Space))))
@@ -97,4 +108,3 @@
 	(let ((*target* target))
 	  (write-element object)
 	  *target*))))
-
