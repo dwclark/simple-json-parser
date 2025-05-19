@@ -15,7 +15,8 @@
   :version "0.0.1"
   :serial t
 
-  :depends-on ("simple-json-parser" "fiveam")
+  :depends-on ("simple-json-parser" "fiveam" "alexandria")
 
-  :components ((:file "test/decodetests")))
+  :components ((:file "test/decodetests")
+	       (:file "test/encodetests")))
 
