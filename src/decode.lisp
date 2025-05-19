@@ -5,6 +5,9 @@
 
 (in-package :simple-json-parser)
 
+(declaim (optimize (speed 3) (safety 0)))
+(declaim (inline clear-buffer add-buffer))
+
 (defparameter *source* nil)
 (defparameter *current* nil)
 (defparameter *line* 0)
