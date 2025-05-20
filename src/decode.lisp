@@ -61,20 +61,19 @@
 	  (setf *eof* t)))))
 
 (defun type-from-char ()
-  (if *eof*
-      :eof
-      (case *current*
-	((#\Space #\Tab #\Return #\Linefeed) :whitespace)
-	(#\, :comma)
-	(#\: :colon)
-	((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) :number)
-	(#\" :string)
-	(#\{ :object)
-	(#\[ :array)
-	(#\t :true)
-	(#\f :false)
-	(#\n :null)
-	(otherwise :illegal))))
+  (case *current*
+    ((#\Space #\Tab #\Return #\Linefeed) :whitespace)
+    (#\, :comma)
+    (#\: :colon)
+    ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) :number)
+    (#\" :string)
+    (#\{ :object)
+    (#\[ :array)
+    (#\t :true)
+    (#\f :false)
+    (#\n :null)
+    (#\Nul :eof)
+    (otherwise :illegal)))
 
 (defun decode-constant (type)
   (flet ((expect (str)
@@ -242,7 +241,7 @@
     (if (= 0 *level*)
 	(progn
 	  (skip-whitespace)
-	  (if (not (eq :eof (type-from-char)))
+	  (if (not *eof*)
 	      (json-error "expecting eof"))))
     ret))
 
