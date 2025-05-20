@@ -33,3 +33,4 @@
 	(two "{\"one\":1,\"two\":2,\"three\":[1,2,3,null,true,false]}"))
     (is (string= one (encode (decode one) nil)))
     (is (string= two (encode (decode two) nil)))))
+

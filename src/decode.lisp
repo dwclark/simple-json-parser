@@ -8,6 +8,7 @@
 (declaim (optimize (speed 3) (safety 0)))
 (declaim (inline clear-buffer add-buffer))
 
+(defvar *max-nesting* 64)
 (defparameter *source* nil)
 (defparameter *current* nil)
 (defparameter *line* 0)
@@ -212,7 +213,9 @@
 	do (move-next)))
 
 (defun decode-element ()
-  (incf *level*)
+  (if (= (incf *level*) *max-nesting*)
+      (json-error (format nil "nesting level is >= ~A" *max-nesting*)))
+  
   (skip-whitespace)
   (let* ((type (type-from-char))
 	 (ret (case type

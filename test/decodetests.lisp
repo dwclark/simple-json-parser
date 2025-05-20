@@ -7,6 +7,7 @@
 (in-suite sjp-tests)
 
 (defparameter *resources* (asdf:system-relative-pathname "simple-json-parser-tests" "test/resources"))
+(defparameter *test-json-files* "/home/david/Sources/JSONTestSuite/test_parsing")
 
 (defun get-test-resource (s)
   (format nil "~A/~A" *resources* s))
@@ -104,3 +105,20 @@
       (is (eq :null (gethash "null" parsed)))
       (is (eq :true (gethash "true" parsed)))
       (is (eq :false (gethash "false" parsed))))))
+
+(test run-y-tests ()
+  (dolist (path-name (directory (concatenate 'string *test-json-files* "/y*.json")))
+    (with-open-file (fstream path-name)
+      (let ((parsed (decode fstream)))
+	(is (eq :true :true))))))
+
+(test run-n-tests ()
+  (dolist (path-name (directory (concatenate 'string *test-json-files* "/n*.json")))
+    (with-open-file (fstream path-name)
+      (handler-case
+	  (progn
+	    (decode fstream)
+	    (is (eq :true :false)))
+	(error (se)
+	  (is (eq :true :true)))))))
+
