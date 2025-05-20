@@ -6,16 +6,25 @@
 (in-package :simple-json-parser)
 
 (declaim (optimize (speed 3) (safety 0)))
-(declaim (inline clear-buffer add-buffer))
+(declaim (inline clear-buffer add-buffer new-buffer new-hex-buffer if-eof-error))
+(declaim (type fixnum +max-nesting+ *line* *column* *level*))
+(declaim (type (vector character) *buffer*))
+(declaim (type (simple-array character (4)) *hex-buffer*))
+(declaim (type boolean *eof*))
+(declaim (type character *current*))
 
-(defvar *max-nesting* 64)
+(defun new-buffer () (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+(defun new-hex-buffer () (make-array 4 :element-type 'character))
+
+(defconstant +max-nesting+ 64)
 (defparameter *source* nil)
-(defparameter *current* nil)
+(defparameter *current* #\Nul)
+(defparameter *eof* nil)
 (defparameter *line* 0)
 (defparameter *column* 0)
 (defparameter *level* 0)
-(defparameter *buffer* nil)
-(defparameter *hex-buffer* nil)
+(defparameter *buffer* (new-buffer))
+(defparameter *hex-buffer* (new-hex-buffer))
 
 (defun clear-buffer ()
   (setf (fill-pointer *buffer*) 0))
@@ -35,14 +44,24 @@
 (defun json-error (msg)
   (error (format nil "At line ~A, column ~A: ~A~%" *line* *column* msg)))
 
+(defun if-eof-error (msg)
+  (if *eof*
+      (json-error msg)))
+
 (defun move-next ()
-  (setf *current* (read-char *source* nil nil))
-  (case *current*
-    (#\Linefeed (incf *line*) (setf *column* 0))
-    (otherwise (incf *column*))))
+  (let ((tmp (read-char *source* nil nil)))
+    (if tmp
+	(progn
+	  (case tmp
+	    (#\Linefeed (incf *line*) (setf *column* 0))
+	    (otherwise (incf *column*)))
+	  (setf *current* tmp))
+	(progn
+	  (setf *current* #\Nul)
+	  (setf *eof* t)))))
 
 (defun type-from-char ()
-  (if (null *current*)
+  (if *eof*
       :eof
       (case *current*
 	((#\Space #\Tab #\Return #\Linefeed) :whitespace)
@@ -133,12 +152,11 @@
 (defun decode-string ()
   (move-next)
   (clear-buffer)
-  (loop while (and *current* (not (char= #\" *current*)))
+  (loop while (and (not *eof*) (not (char= #\" *current*)))
 	do (case *current*
 	     (#\\
 	      (move-next)
-	      (if (null *current*)
-		  (json-error "expecting char"))
+	      (if-eof-error "expecting char")
 	      (case *current*
 		(#\" (add-buffer #\") (move-next))
 		(#\\ (add-buffer #\\) (move-next))
@@ -152,8 +170,7 @@
 		(otherwise (json-error "expected special char sequence"))))
 	     (otherwise (add-buffer *current*) (move-next))))
   
-  (if (null *current*)
-      (json-error "expected \" character, got eof"))
+  (if-eof-error "expected \" character, got eof")
   
   (move-next)
   (copy-seq *buffer*))
@@ -165,14 +182,12 @@
 	while (and *current* (not (char= #\] *current*)))
 	do (vector-push-extend (decode-element) ary)
 	   (skip-whitespace)
-	   (if (null *current*)
-	       (json-error "expecting ',' or ']' got eof"))
+	   (if-eof-error "expecting ',' or ']' got eof")
 	   (case *current*
 	     (#\,
 	      (move-next)
 	      (skip-whitespace)
-	      (if (null *current*)
-		  (json-error (format nil "expecting array element got ~A" *current*)))
+	      (if-eof-error(format nil "expecting array element got ~A" *current*))
 	      (if (char= #\] *current*)
 		  (json-error "expecting array element got ']'")))
 	     (#\] nil)
@@ -191,16 +206,14 @@
 	       (json-error (format nil "expecting '\"' but got ~A" *current*)))
 	   (setf current-key (decode-string))
 	   (skip-whitespace)
-	   (if (null *current*)
-	       (json-error "expecting ':' but got eof"))
+	   (if-eof-error "expecting ':' but got eof")
 	   (if (not (eq :colon (type-from-char)))
 	       (json-error (format nil "expecting ':' but got ~A" *current*)))
 	   (move-next)
 	   (setf current-val (decode-element))
 	   (setf (gethash current-key table) current-val)
 	   (skip-whitespace)
-	   (if (null *current*)
-	       (json-error "expecting ',' or '}' but got eof"))
+	   (if-eof-error "expecting ',' or '}' but got eof")
 	   (case *current*
 	     (#\, (move-next))
 	     (#\} nil)
@@ -213,8 +226,8 @@
 	do (move-next)))
 
 (defun decode-element ()
-  (if (= (incf *level*) *max-nesting*)
-      (json-error (format nil "nesting level is >= ~A" *max-nesting*)))
+  (if (= (incf *level*) +max-nesting+)
+      (json-error (format nil "nesting level is >= ~A" +max-nesting+)))
   
   (skip-whitespace)
   (let* ((type (type-from-char))
@@ -236,12 +249,14 @@
 (defun decode (source)
   (etypecase source
     (stream (let ((*source* source)
-		  (*current* (read-char source nil nil))
+		  (*current* #\Nul)
+		  (*eof* nil)
 		  (*line* 1)
 		  (*column* 0)
 		  (*level* 0)
-		  (*buffer* (make-array 1 :element-type 'character :adjustable t :fill-pointer 0))
-		  (*hex-buffer* (make-array 4 :element-type 'character)))
+		  (*buffer* (new-buffer))
+		  (*hex-buffer* (new-hex-buffer)))
+	      (move-next)
 	      (decode-element)))
     (string (with-input-from-string (stm source)
 	      (decode stm)))))
