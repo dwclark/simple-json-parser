@@ -122,7 +122,7 @@
 	(error (se)
 	  (is (eq :true :true)))))))
 
-;; Preliminary results, gets about 33.4 MB/s, not bad!
+;; Preliminary results, gets about 37.5 MB/s, not bad!
 (defun test-performance ()
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
     (dotimes (myvar 1000)

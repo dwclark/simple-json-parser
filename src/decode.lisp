@@ -6,30 +6,33 @@
 (in-package :simple-json-parser)
 
 (declaim (optimize (speed 3) (safety 0)))
-(declaim (inline clear-buffer add-buffer new-buffer new-hex-buffer if-eof-error))
-(declaim (type fixnum +max-nesting+ *line* *column* *level*))
+(declaim (inline clear-buffer add-buffer new-buffer new-hex-buffer if-eof-error eof-p))
+
+(declaim (type fixnum +max-nesting+ *pos* *level*))
 (declaim (type (vector character) *buffer*))
 (declaim (type (simple-array character (4)) *hex-buffer*))
-(declaim (type boolean *eof*))
 (declaim (type character *current*))
+(declaim (type (function () character) *next-char*))
 
-(defun new-buffer () (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+(defun new-buffer () (make-array 1024 :element-type 'character :adjustable t :fill-pointer 0))
 (defun new-hex-buffer () (make-array 4 :element-type 'character))
 
 (defconstant +max-nesting+ 64)
-(defparameter *source* nil)
+(defparameter *next-char* (lambda () #\Nul))
 (defparameter *current* #\Nul)
-(defparameter *eof* nil)
-(defparameter *line* 0)
-(defparameter *column* 0)
+(defparameter *pos* 0)
 (defparameter *level* 0)
 (defparameter *buffer* (new-buffer))
 (defparameter *hex-buffer* (new-hex-buffer))
+
+(defun eof-p ()
+  (char= #\Nul *current*))
 
 (defun clear-buffer ()
   (setf (fill-pointer *buffer*) 0))
 
 (defun add-buffer (c)
+  (declare (type character c))
   (vector-push-extend c *buffer*))
 
 (defun hex-code ()
@@ -42,23 +45,15 @@
 	finally (return (parse-integer *hex-buffer* :radix 16))))
 
 (defun json-error (msg)
-  (error (format nil "At line ~A, column ~A: ~A~%" *line* *column* msg)))
+  (error (format nil "At pos ~A, ~A~%" *pos* msg)))
 
 (defun if-eof-error (msg)
-  (if *eof*
+  (if (eof-p)
       (json-error msg)))
 
 (defun move-next ()
-  (let ((tmp (read-char *source* nil nil)))
-    (if tmp
-	(progn
-	  (case tmp
-	    (#\Linefeed (incf *line*) (setf *column* 0))
-	    (otherwise (incf *column*)))
-	  (setf *current* tmp))
-	(progn
-	  (setf *current* #\Nul)
-	  (setf *eof* t)))))
+  (setf *current* (funcall *next-char*))
+  (incf *pos*))
 
 (defun type-from-char ()
   (case *current*
@@ -76,6 +71,7 @@
     (otherwise :illegal)))
 
 (defun decode-constant (type)
+  (declare (type symbol type))
   (flet ((expect (str)
 	   (loop for c across str
 		 do (if (char= c *current*)
@@ -151,7 +147,7 @@
 (defun decode-string ()
   (move-next)
   (clear-buffer)
-  (loop while (and (not *eof*) (not (char= #\" *current*)))
+  (loop while (and (not (eof-p)) (not (char= #\" *current*)))
 	do (case *current*
 	     (#\\
 	      (move-next)
@@ -241,21 +237,33 @@
     (if (= 0 *level*)
 	(progn
 	  (skip-whitespace)
-	  (if (not *eof*)
+	  (if (not (eof-p))
 	      (json-error "expecting eof"))))
     ret))
 
+(defun next-char-from-stream (stm)
+  (lambda ()
+    (read-char stm nil #\Nul)))
+
+(defun next-char-from-string (str)
+  (declare (type simple-string str))
+  (let ((pos -1)
+	(str-length (array-dimension str 0)))
+    (declare (type fixnum pos))
+    (lambda ()
+      (if (< (incf pos) str-length)
+	  (aref str pos)
+	  #\Nul))))
+
 (defun decode (source)
-  (etypecase source
-    (stream (let ((*source* source)
-		  (*current* #\Nul)
-		  (*eof* nil)
-		  (*line* 1)
-		  (*column* 0)
-		  (*level* 0)
-		  (*buffer* (new-buffer))
-		  (*hex-buffer* (new-hex-buffer)))
-	      (move-next)
-	      (decode-element)))
-    (string (with-input-from-string (stm source)
-	      (decode stm)))))
+  (let ((*next-char* (etypecase source
+		       (stream (next-char-from-stream source))
+		       (string (next-char-from-string source))))
+	(*current* #\Nul)
+	(*line* 1)
+	(*column* 0)
+	(*level* 0)
+	(*buffer* (new-buffer))
+	(*hex-buffer* (new-hex-buffer)))
+    (move-next)
+    (decode-element)))
