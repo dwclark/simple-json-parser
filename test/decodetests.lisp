@@ -125,7 +125,7 @@
 ;; Preliminary results, gets about 37.5 MB/s, not bad!
 (defun test-performance ()
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
-    (dotimes (myvar 1000)
+    (dotimes (myvar 1024)
       (decode contents))
     nil))
 

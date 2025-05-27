@@ -6,19 +6,19 @@
 (in-package :simple-json-parser)
 
 (declaim (optimize (speed 3) (safety 0)))
-(declaim (inline clear-buffer add-buffer new-buffer new-hex-buffer if-eof-error eof-p))
+(declaim (inline clear-buffer add-buffer new-buffer new-hex-buffer if-eof-error eof-p move-next))
 
 (declaim (type fixnum +max-nesting+ *pos* *level*))
 (declaim (type (vector character) *buffer*))
 (declaim (type (simple-array character (4)) *hex-buffer*))
 (declaim (type character *current*))
-(declaim (type (function () character) *next-char*))
+(declaim (type (function () (values character fixnum)) *next-char*))
 
 (defun new-buffer () (make-array 1024 :element-type 'character :adjustable t :fill-pointer 0))
 (defun new-hex-buffer () (make-array 4 :element-type 'character))
 
 (defconstant +max-nesting+ 64)
-(defparameter *next-char* (lambda () #\Nul))
+(defparameter *next-char* (lambda () (values #\Nul -1)))
 (defparameter *current* #\Nul)
 (defparameter *pos* 0)
 (defparameter *level* 0)
@@ -52,8 +52,7 @@
       (json-error msg)))
 
 (defun move-next ()
-  (setf *current* (funcall *next-char*))
-  (incf *pos*))
+  (setf (values *current* *pos*) (funcall *next-char*)))
 
 (defun type-from-char ()
   (case *current*
@@ -173,10 +172,10 @@
 (defun decode-array ()
   (move-next)
   (skip-whitespace)
-  (loop with ary = (make-array 0 :adjustable t :fill-pointer 0)
-	while (and *current* (not (char= #\] *current*)))
-	do (vector-push-extend (decode-element) ary)
-	   (skip-whitespace)
+  (loop while (and *current* (not (char= #\] *current*)))
+	collecting (decode-element) into array-list
+	summing 1 into array-size fixnum
+	do (skip-whitespace)
 	   (if-eof-error "expecting ',' or ']' got eof")
 	   (case *current*
 	     (#\,
@@ -187,7 +186,7 @@
 		  (json-error "expecting array element got ']'")))
 	     (#\] nil)
 	     (otherwise (json-error "expecting legal json element")))
-	finally (return (progn (move-next) ary))))
+	finally (return (progn (move-next) (make-array array-size :initial-contents array-list))))) 
 
 (defun decode-object ()
   (move-next)
@@ -214,7 +213,6 @@
 	     (#\} nil)
 	     (otherwise (json-error (format nil "expecting ',' or '}' but got ~A" *current*))))
 	finally (return (progn (move-next) table))))
-	   
 
 (defun skip-whitespace ()
   (loop while (eq :whitespace (type-from-char))
@@ -242,26 +240,34 @@
     ret))
 
 (defun next-char-from-stream (stm)
-  (lambda ()
-    (read-char stm nil #\Nul)))
-
-(defun next-char-from-string (str)
-  (declare (type simple-string str))
-  (let ((pos -1)
-	(str-length (array-dimension str 0)))
+  (let ((pos -1))
     (declare (type fixnum pos))
     (lambda ()
-      (if (< (incf pos) str-length)
-	  (aref str pos)
-	  #\Nul))))
+      (values (read-char stm nil #\Nul) (incf pos)))))
+
+(defmacro next-char-from-string-body (str)
+  `(let ((pos -1)
+	 (str-length (array-dimension ,str 0)))
+     (declare (type fixnum pos str-length))
+     (lambda ()
+       (if (< (incf pos) str-length)
+	   (values (aref ,str pos) pos)
+	   (values #\Nul pos)))))
+
+(defun next-char-from-simple-string (str)
+  (declare (type simple-string str))
+  (next-char-from-string-body str))
+
+(defun next-char-from-string (str)
+  (declare (type string str))
+  (next-char-from-string-body str))
 
 (defun decode (source)
   (let ((*next-char* (etypecase source
 		       (stream (next-char-from-stream source))
+		       (simple-string (next-char-from-simple-string source))
 		       (string (next-char-from-string source))))
 	(*current* #\Nul)
-	(*line* 1)
-	(*column* 0)
 	(*level* 0)
 	(*buffer* (new-buffer))
 	(*hex-buffer* (new-hex-buffer)))
