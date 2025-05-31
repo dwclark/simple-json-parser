@@ -122,7 +122,10 @@
 	(error (se)
 	  (is (eq :true :true)))))))
 
-;; Preliminary results, gets about 37.5 MB/s, not bad!
+;; Now getting around 42 MB/s
+;; I thought this was good until I ran jzon on the same contents
+;; It gets 100 MB/s consistently
+;; I'm also impressed that it uses generics extensively
 (defun test-performance ()
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
     (dotimes (myvar 1024)
