@@ -6,6 +6,7 @@
   ;:depends-on ("parse-float" "alexandria")
   :serial t
   :components ((:file "src/decode")
+	       (:file "src/decode-event")
 	       (:file "src/encode")))
 
 (asdf:defsystem #:simple-json-parser-tests
