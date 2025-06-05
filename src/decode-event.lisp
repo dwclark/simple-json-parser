@@ -2,36 +2,36 @@
 
 (declaim (optimize (speed 3) (debug 0) ))
 
-(defgeneric current (parser))
-(defgeneric next (parser))
-(defgeneric prev (parser))
-(defgeneric peek (parser))
+(defstruct (simple-string-parser (:conc-name ""))
+  (read-buffer "" :type simple-string)
+  (pos -1 :type fixnum))
 
-(defclass simple-string-parser ()
-  ((read-buffer :initarg :read-buffer :initform (error "must supply read buffer") :reader read-buffer :type simple-string)
-   (pos :initarg :pos :initform -1 :reader pos :type fixnum)))
+(declaim (inline next current prev peek whitespace-p consume-whitespace consume-exact
+		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
+		 json-stack-push-object json-stack-pop-array json-stack-pop-object
+		 json-stack-validate-key next-event))
 
-(defmethod next ((parser simple-string-parser))
-  (with-slots (read-buffer pos) parser
-    (if (< (incf pos) (length read-buffer))
-	(aref read-buffer pos)
-	#\Nul)))
+(defun next (parser)
+  (declare (type simple-string-parser parser))
+  (if (< (incf (pos parser)) (length (read-buffer parser)))
+      (aref (read-buffer parser) (pos parser))
+      #\Nul))
 
-(defmethod current ((parser simple-string-parser))
-  (with-slots (read-buffer pos) parser
-    (if (< pos (length read-buffer))
-	(aref read-buffer pos)
-	#\Nul)))
+(defun current (parser)
+  (declare (type simple-string-parser parser))
+  (if (< (pos parser) (length (read-buffer parser)))
+      (aref (read-buffer parser) (pos parser))
+      #\Nul))
 
-(defmethod prev ((parser simple-string-parser))
-  (with-slots (read-buffer pos) parser
-    (aref read-buffer (1- pos))))
+(defun prev (parser)
+  (declare (type simple-string-parser parser))
+  (aref (read-buffer parser) (1- (pos parser))))
 
-(defmethod peek ((parser simple-string-parser))
-  (with-slots (read-buffer pos) parser
-    (if (< (1+ pos) (length read-buffer))
-	(aref read-buffer (1+ pos))
-	#\Nul)))
+(defun peek (parser)
+  (declare (type simple-string-parser parser))
+  (if (< (1+ (pos parser)) (length (read-buffer parser)))
+      (aref (read-buffer parser) (1+ (pos parser)))
+      #\Nul))
 
 (defun whitespace-p (c)
   (declare (type character c))
@@ -68,20 +68,23 @@
   (values :float start (pos my-parser)))
 
 (defun consume-string (start my-parser)
+  (declare (type simple-string-parser my-parser))
   (declare (type fixnum start))
   (loop with event-type = :string
-	for c = (next my-parser) then (next my-parser)
+	for c of-type character = (next my-parser) then (next my-parser)
 	until (and (char= #\" c) (not (char= #\\ (prev my-parser))))
 	do (if (char= #\\ c)
 	       (case (peek my-parser)
 		 ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
-		 (otherwise (json-error "Expecting escape sequence"))))
+		 (otherwise (error "Expecting escape sequence"))))
 	finally (return (values event-type start (pos my-parser)))))
 
 (defun consume-whitespace (my-parser)
+  (declare (type simple-string-parser my-parser))
   (loop while (whitespace-p (next my-parser))))
 
 (defun consume-exact (my-parser expect)
+  (declare (type simple-string-parser my-parser))
   (declare (type simple-string expect))
   (loop for c across expect
 	do (if (char= c (peek my-parser))
@@ -190,6 +193,7 @@
 	finally (return ret)))
 
 (defun next-event (my-parser)
+  (declare (type simple-string-parser my-parser))
   (consume-whitespace my-parser)
   (let ((start (pos my-parser)))
     (case (current my-parser)
@@ -209,9 +213,11 @@
 (defun decode-event (src)
   (let ((stack (make-json-stack))
 	(my-parser (etypecase src
-		     (simple-string (make-instance 'simple-string-parser :read-buffer src)))))
+		     (simple-string (make-simple-string-parser :read-buffer src)))))
     
     (loop do (multiple-value-bind (evt start end) (next-event my-parser)
+	       (declare (type symbol evt))
+	       (declare (type fixnum start end))
 	       (ecase evt
 		 (:true (json-stack-push stack :true))
 		 (:false (json-stack-push stack :false))

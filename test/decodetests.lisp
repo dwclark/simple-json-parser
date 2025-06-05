@@ -137,6 +137,7 @@
       (decode contents))
     nil))
 
+;; gets around 97 MB/s once you remove the CLOS stuff
 (defun test-event-performance ()
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
     (dotimes (myvar 1024)
