@@ -43,7 +43,7 @@
 	do (next my-parser))
 
   (let ((c (peek my-parser)))
-    (when (or (whitespace-p c) (char= c #\Nul))
+    (when (or (whitespace-p c) (char= c #\,) (char= c #\]) (char= c #\}) (char= c #\Nul))
       (return-from consume-number (values :integer start (pos my-parser)))))
 
   (when (char= #\. (peek my-parser))
