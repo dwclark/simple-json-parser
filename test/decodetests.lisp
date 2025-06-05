@@ -13,40 +13,44 @@
   (format nil "~A/~A" *resources* s))
   
 (test test-decode-constants
-  (is (eq :true (decode "true")))
-  (is (eq :false (decode "false")))
-  (is (eq :null (decode "null"))))
+  (loop for func in (list #'decode #'decode-event)
+	do (is (eq :true (funcall func "true")))
+	   (is (eq :false (funcall func "false")))
+	   (is (eq :null (funcall func "null")))))
 
 (test test-decode-numbers
-  (is (= 1 (decode "1")))
-  (is (= 123 (decode "123")))
-  (is (equalp 1e10 (decode "1e10")))
-  (is (equalp 1.2e10 (decode "1.2e10")))
-  (is (equalp 1.2e10 (decode "1.2e+10")))
-  (is (= 1.257 (coerce (decode "1.257") 'single-float)))
-  (is (= 1.245d-9 (decode "12.45e-10")))
-  (is (= 1.783456e-10 (coerce (decode "178.3456e-12") 'single-float)))
-  (is (= -1.783456e-10 (coerce (decode "-178.3456e-12") 'single-float)))
-  (is (zerop (decode "0")))
-  (is (zerop (decode "-0"))))
+  (loop for func in (list #'decode #'decode-event)
+	do (is (= 1 (funcall func "1")))
+	   (is (= 123 (funcall func "123")))
+	   (is (equalp 1e10 (funcall func "1e10")))
+	   (is (equalp 1.2e10 (funcall func "1.2e10")))
+	   (is (equalp 1.2e10 (funcall func "1.2e+10")))
+	   (is (= 1.257 (coerce (funcall func "1.257") 'single-float)))
+	   (is (= 1.245d-9 (funcall func "12.45e-10")))
+	   (is (= 1.783456e-10 (coerce (funcall func "178.3456e-12") 'single-float)))
+	   (is (= -1.783456e-10 (coerce (funcall func "-178.3456e-12") 'single-float)))
+	   (is (zerop (funcall func "0")))
+	   (is (zerop (funcall func "-0")))))
 
 (test test-decode-string
-  (is (string= "foo" (decode "\"foo\"")))
-  (is (string= (decode "\"fo\\no\"") (make-array 4 :element-type 'character :initial-contents '(#\f #\o #\Linefeed #\o))))
-  (is (string= (decode "\"t\\tab\"") (make-array 4 :element-type 'character :initial-contents '(#\t #\Tab #\a #\b))))
-  (is (string= "foo" (decode "\"\\u0066\\u006f\\u006f\"")))
-  (is (string= "foo" (decode "\"\\u0066\\u006F\\u006F\""))))
+  (loop for func in (list #'decode #'decode-event)
+	do (is (string= "foo" (funcall func "\"foo\"")))
+	   (is (string= (funcall func "\"fo\\no\"") (make-array 4 :element-type 'character :initial-contents '(#\f #\o #\Linefeed #\o))))
+	   (is (string= (funcall func "\"t\\tab\"") (make-array 4 :element-type 'character :initial-contents '(#\t #\Tab #\a #\b))))
+	   (is (string= "foo" (funcall func "\"\\u0066\\u006f\\u006f\"")))
+	   (is (string= "foo" (funcall func "\"\\u0066\\u006F\\u006F\"")))))
 
 (test test-decode-array
-  (is (equalp #() (decode "[]")))
-  (is (equalp #() (decode "[         ]")))
-  (is (equalp #(1 2 3) (decode "[1,2,3]")))
-  (is (equalp #(1 2 3) (decode "[ 1  ,2   ,   3]")))
-  (is (equalp #(1 2 #(3 4)) (decode "[1,2,[3,4]]")))
-  (is (equalp #(1 2 #(3 4)) (decode "[1  ,   2,[    3,   4    ]]")))
-  (is (equalp #("foo") (decode "[\"foo\"]")))
-  (is (equalp #(" fo  o") (decode "[   \" fo  o\"    ]")))
-  (is (equalp #(1 "two" #("buckle" 3) 4) (decode "[1, \"two\", [ \"buckle\" , 3  ], 4]"))))
+  (loop for func in (list #'decode #'decode-event)
+	do (is (equalp #() (funcall func "[]")))
+	   (is (equalp #() (funcall func "[         ]")))
+	   (is (equalp #(1 2 3) (funcall func "[1,2,3]")))
+	   (is (equalp #(1 2 3) (funcall func "[ 1  ,2   ,   3]")))
+	   (is (equalp #(1 2 #(3 4)) (funcall func "[1,2,[3,4]]")))
+	   (is (equalp #(1 2 #(3 4)) (funcall func "[1  ,   2,[    3,   4    ]]")))
+	   (is (equalp #("foo") (funcall func "[\"foo\"]")))
+	   (is (equalp #(" fo  o") (funcall func "[   \" fo  o\"    ]")))
+	   (is (equalp #(1 "two" #("buckle" 3) 4) (funcall func "[1, \"two\", [ \"buckle\" , 3  ], 4]")))))
 
 (defun expected-hash-table-p (list table)
   (loop for (key . val) in list
@@ -60,10 +64,11 @@
 	finally (return t)))
 
 (test test-decode-object
-  (is (expected-hash-table-p '() (decode "{}")))
-  (is (expected-hash-table-p '(("foo" . 1)) (decode "{ \"foo\": 1 }")))
-  (is (expected-hash-table-p '(("foo" . #(1 2 3)) ("1" . ("key" . 100)))
-			     (decode "{ \"foo\": [1,2,3], \"1\": { \"key\": 100 } }"))))
+  (loop for func in (list #'decode #'decode-event)
+	do (is (expected-hash-table-p '() (funcall func "{}")))
+	   (is (expected-hash-table-p '(("foo" . 1)) (funcall func "{ \"foo\": 1 }")))
+	   (is (expected-hash-table-p '(("foo" . #(1 2 3)) ("1" . ("key" . 100)))
+				      (funcall func "{ \"foo\": [1,2,3], \"1\": { \"key\": 100 } }")))))
 
 
 (test test-file-parsing
@@ -130,5 +135,11 @@
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
     (dotimes (myvar 1024)
       (decode contents))
+    nil))
+
+(defun test-event-performance ()
+  (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
+    (dotimes (myvar 1024)
+      (decode-event contents))
     nil))
 

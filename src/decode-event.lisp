@@ -1,6 +1,6 @@
 (in-package :simple-json-parser)
 
-(declaim (optimize (speed 0) (debug 3)))
+(declaim (optimize (speed 3) (debug 0) ))
 
 (defgeneric current (parser))
 (defgeneric next (parser))
@@ -8,8 +8,8 @@
 (defgeneric peek (parser))
 
 (defclass simple-string-parser ()
-  ((read-buffer :initarg :read-buffer :initform (error "must supply read buffer") :reader read-buffer)
-   (pos :initarg :pos :initform -1 :reader pos)))
+  ((read-buffer :initarg :read-buffer :initform (error "must supply read buffer") :reader read-buffer :type simple-string)
+   (pos :initarg :pos :initform -1 :reader pos :type fixnum)))
 
 (defmethod next ((parser simple-string-parser))
   (with-slots (read-buffer pos) parser
@@ -34,11 +34,13 @@
 	#\Nul)))
 
 (defun whitespace-p (c)
+  (declare (type character c))
   (case c
     ((#\Space #\Tab #\Return #\Linefeed) t)
     (otherwise nil)))
 
 (defun consume-number (start my-parser)
+  (declare (type fixnum start))
   (loop while (digit-char-p (peek my-parser))
 	do (next my-parser))
 
@@ -66,6 +68,7 @@
   (values :float start (pos my-parser)))
 
 (defun consume-string (start my-parser)
+  (declare (type fixnum start))
   (loop with event-type = :string
 	for c = (next my-parser) then (next my-parser)
 	until (and (char= #\" c) (not (char= #\\ (prev my-parser))))
@@ -79,31 +82,12 @@
   (loop while (whitespace-p (next my-parser))))
 
 (defun consume-exact (my-parser expect)
+  (declare (type simple-string expect))
   (loop for c across expect
 	do (if (char= c (peek my-parser))
 	       (next my-parser)
 	       (error (format t "expected ~A" c)))
 	finally (return (pos my-parser))))
-
-;; :string :escaped-string :integer :float :true :false :null
-;; :start-object :end-object :start-array :end-array :end-key :end-item :eof
-(defun next-event (my-parser)
-  (consume-whitespace my-parser)
-  (let ((start (pos my-parser)))
-    (format t "next-event: start: ~A, current: ~A~%" start (current my-parser))
-    (case (current my-parser)
-      (#\t (values :true start (consume-exact my-parser "rue")))
-      (#\f (values :false start (consume-exact my-parser "alse")))
-      (#\n (values :null start (consume-exact my-parser "ull")))
-      (#\, (values :end-item start start))
-      (#\: (values :end-key start start))
-      ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number start my-parser))
-      (#\" (consume-string start my-parser))
-      (#\{ (values :start-object start start))
-      (#\} (values :end-object start start))
-      (#\[ (values :start-array start start))
-      (#\] (values :end-array start start))
-      (#\Nul (values :eof -1 -1)))))
 
 (defstruct json-stack
   (contents (make-array 1024) :type (simple-vector 1024))
@@ -178,13 +162,56 @@
   (if (not (typep (json-stack-at stack 0) 'string))
       (error "invalid key type")))
 
+(defun json-string-unencode (s start end)
+  (declare (type simple-string s))
+  (declare (type fixnum start end))
+  (loop with ret = (make-array 0 :element-type 'character :adjustable t :fill-pointer 0)
+	with index = start
+	while (< index end)
+	do (let ((current (char s index)))
+	     (incf index)
+	     (case current
+	       (#\\
+		(let ((next (char s index)))
+		  (incf index)
+		  (case next
+		    (#\" (vector-push-extend #\" ret))
+		    (#\\ (vector-push-extend #\\ ret))
+		    (#\/ (vector-push-extend #\/ ret))
+		    (#\b (vector-push-extend #\Backspace ret))
+		    (#\f (vector-push-extend #\Formfeed ret))
+		    (#\n (vector-push-extend #\Linefeed ret))
+		    (#\r (vector-push-extend #\Return ret))
+		    (#\t (vector-push-extend #\Tab ret))
+		    (#\u (vector-push-extend (code-char (parse-integer s :start (1+ index) :end (incf index 4)
+									 :radix 16 :junk-allowed nil)) ret))
+		    (otherwise (error "expected special char sequence")))))
+	       (otherwise (vector-push-extend current ret))))
+	finally (return ret)))
+
+(defun next-event (my-parser)
+  (consume-whitespace my-parser)
+  (let ((start (pos my-parser)))
+    (case (current my-parser)
+      (#\t (values :true start (consume-exact my-parser "rue")))
+      (#\f (values :false start (consume-exact my-parser "alse")))
+      (#\n (values :null start (consume-exact my-parser "ull")))
+      (#\, (values :end-item start start))
+      (#\: (values :end-key start start))
+      ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number start my-parser))
+      (#\" (consume-string start my-parser))
+      (#\{ (values :start-object start start))
+      (#\} (values :end-object start start))
+      (#\[ (values :start-array start start))
+      (#\] (values :end-array start start))
+      (#\Nul (values :eof -1 -1)))))
+
 (defun decode-event (src)
   (let ((stack (make-json-stack))
 	(my-parser (etypecase src
 		     (simple-string (make-instance 'simple-string-parser :read-buffer src)))))
     
     (loop do (multiple-value-bind (evt start end) (next-event my-parser)
-	       (format t "evt: ~A, start: ~A, end: ~A~%" evt start end)
 	       (ecase evt
 		 (:true (json-stack-push stack :true))
 		 (:false (json-stack-push stack :false))
@@ -196,8 +223,11 @@
 		  (let ((*read-default-float-format* 'double-float))
 		    (json-stack-push stack (read-from-string (read-buffer my-parser) t #\Nul :start start :end (1+ end)))))
 		 
-		 ((:string :escaped-string) ;;TODO: need to escape string if necessary
+		 (:string
 		  (json-stack-push stack (subseq (read-buffer my-parser) (1+ start) end)))
+
+		 (:escaped-string
+		  (json-stack-push stack (json-string-unencode (read-buffer my-parser) (1+ start) end)))
 		 
 		 (:start-object
 		  (json-stack-push-object stack))
