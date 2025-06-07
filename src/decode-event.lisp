@@ -1,12 +1,13 @@
 (in-package :simple-json-parser)
 
-(declaim (optimize (speed 3) (debug 0) ))
+(declaim (optimize (speed 3) (debug 0) (safety 0)))
 
 (defstruct (simple-string-parser (:conc-name ""))
   (read-buffer "" :type simple-string)
   (pos -1 :type fixnum))
 
 (declaim (inline next current prev peek whitespace-p consume-whitespace consume-exact
+		 consume-string
 		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
 		 json-stack-push-object json-stack-pop-array json-stack-pop-object
 		 json-stack-validate-key next-event))
@@ -212,6 +213,7 @@
 
 (defun decode-event (src)
   (let ((stack (make-json-stack))
+	(*read-default-float-format* 'double-float)
 	(my-parser (etypecase src
 		     (simple-string (make-simple-string-parser :read-buffer src)))))
     
@@ -226,8 +228,7 @@
 		  (json-stack-push stack (parse-integer (read-buffer my-parser) :start start :end (1+ end))))
 		 
 		 (:float
-		  (let ((*read-default-float-format* 'double-float))
-		    (json-stack-push stack (read-from-string (read-buffer my-parser) t #\Nul :start start :end (1+ end)))))
+		  (json-stack-push stack (read-from-string (read-buffer my-parser) t #\Nul :start start :end (1+ end))))
 		 
 		 (:string
 		  (json-stack-push stack (subseq (read-buffer my-parser) (1+ start) end)))
