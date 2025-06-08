@@ -211,10 +211,12 @@
     (#\Nul (values :eof -1 -1))))
 
 (defun decode-event (src)
-  (let ((stack (make-json-stack))
-	(*read-default-float-format* 'double-float)
-	(my-parser (etypecase src
-		     (simple-string (make-simple-string-parser :read-buffer src)))))
+  (let* ((stack (make-json-stack))
+	 (*read-default-float-format* 'double-float)
+	 (read-buffer (etypecase src
+			(simple-string src)))
+	 (my-parser (etypecase src
+		      (simple-string (make-simple-string-parser :read-buffer read-buffer)))))
     
     (loop do (multiple-value-bind (evt start end) (next-event my-parser)
 	       (declare (type symbol evt))
@@ -225,16 +227,16 @@
 		 (:null (json-stack-push stack :null))
 
 		 (:integer
-		  (json-stack-push stack (parse-integer (read-buffer my-parser) :start start :end (1+ end))))
+		  (json-stack-push stack (parse-integer read-buffer :start start :end (1+ end))))
 		 
 		 (:float
-		  (json-stack-push stack (read-from-string (read-buffer my-parser) t #\Nul :start start :end (1+ end))))
+		  (json-stack-push stack (read-from-string read-buffer t #\Nul :start start :end (1+ end))))
 		 
 		 (:string
-		  (json-stack-push stack (subseq (read-buffer my-parser) (1+ start) end)))
+		  (json-stack-push stack (subseq read-buffer (1+ start) end)))
 
 		 (:escaped-string
-		  (json-stack-push stack (json-string-unencode (read-buffer my-parser) (1+ start) end)))
+		  (json-stack-push stack (json-string-unencode read-buffer (1+ start) end)))
 		 
 		 (:start-object
 		  (json-stack-push-object stack))
