@@ -139,6 +139,7 @@
 
 ;; gets around 97 MB/s once you remove the CLOS stuff
 ;; gets around 102 MB/s when you also turn off array bounds checking
+;; gets > 110 MB/s when you simplify current/next/prev/peek
 (defun test-event-performance ()
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
     (dotimes (myvar 1024)

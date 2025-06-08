@@ -6,7 +6,7 @@
   (read-buffer "" :type simple-string)
   (pos -1 :type fixnum))
 
-(declaim (inline next current prev peek whitespace-p consume-whitespace consume-exact
+(declaim (inline next peek whitespace-p consume-whitespace consume-exact
 		 consume-string
 		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
 		 json-stack-push-object json-stack-pop-array json-stack-pop-object
@@ -17,16 +17,6 @@
   (if (< (incf (pos parser)) (length (read-buffer parser)))
       (aref (read-buffer parser) (pos parser))
       #\Nul))
-
-(defun current (parser)
-  (declare (type simple-string-parser parser))
-  (if (< (pos parser) (length (read-buffer parser)))
-      (aref (read-buffer parser) (pos parser))
-      #\Nul))
-
-(defun prev (parser)
-  (declare (type simple-string-parser parser))
-  (aref (read-buffer parser) (1- (pos parser))))
 
 (defun peek (parser)
   (declare (type simple-string-parser parser))
@@ -40,49 +30,54 @@
     ((#\Space #\Tab #\Return #\Linefeed) t)
     (otherwise nil)))
 
-(defun consume-number (start my-parser)
-  (declare (type fixnum start))
-  (loop while (digit-char-p (peek my-parser))
-	do (next my-parser))
-
-  (let ((c (peek my-parser)))
-    (when (or (whitespace-p c) (char= c #\,) (char= c #\]) (char= c #\}) (char= c #\Nul))
-      (return-from consume-number (values :integer start (pos my-parser)))))
-
-  (when (char= #\. (peek my-parser))
-    (next my-parser)
-    (if (digit-char-p (peek my-parser))
-	(loop while (digit-char-p (peek my-parser))
-	      do (next my-parser))
-	(error "expected digits")))
-  
-  (when (char-equal #\e (peek my-parser))
-    (next my-parser)
-    (when (or (char= #\+ (peek my-parser))
-	      (char= #\- (peek my-parser)))
-      (next my-parser))
-    (if (digit-char-p (peek my-parser))
-	(loop while (digit-char-p (peek my-parser))
-	      do (next my-parser))
-	(error "expected digits")))
-
-  (values :float start (pos my-parser)))
-
-(defun consume-string (start my-parser)
+(defun consume-number (my-parser)
   (declare (type simple-string-parser my-parser))
-  (declare (type fixnum start))
-  (loop with event-type = :string
+  (let ((start (the fixnum (pos my-parser))))
+    (loop while (digit-char-p (peek my-parser))
+	  do (next my-parser))
+    
+    (let ((c (peek my-parser)))
+      (when (or (whitespace-p c) (char= c #\,) (char= c #\]) (char= c #\}) (char= c #\Nul))
+	(return-from consume-number (values :integer start (pos my-parser)))))
+    
+    (when (char= #\. (peek my-parser))
+      (next my-parser)
+      (if (digit-char-p (peek my-parser))
+	  (loop while (digit-char-p (peek my-parser))
+		do (next my-parser))
+	  (error "expected digits")))
+    
+    (when (char-equal #\e (peek my-parser))
+      (next my-parser)
+      (when (or (char= #\+ (peek my-parser))
+		(char= #\- (peek my-parser)))
+	(next my-parser))
+      (if (digit-char-p (peek my-parser))
+	  (loop while (digit-char-p (peek my-parser))
+		do (next my-parser))
+	  (error "expected digits")))
+    
+    (values :float start (pos my-parser))))
+
+(defun consume-string (my-parser)
+  (declare (type simple-string-parser my-parser))
+  (loop with start of-type fixnum = (pos my-parser)
+	with event-type = :string
+	with prev of-type character = #\Nul
 	for c of-type character = (next my-parser) then (next my-parser)
-	until (and (char= #\" c) (not (char= #\\ (prev my-parser))))
+	until (and (char= #\" c) (not (char= #\\ prev)))
 	do (if (char= #\\ c)
 	       (case (peek my-parser)
 		 ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
 		 (otherwise (error "Expecting escape sequence"))))
+	   (setf prev c)
 	finally (return (values event-type start (pos my-parser)))))
 
 (defun consume-whitespace (my-parser)
   (declare (type simple-string-parser my-parser))
-  (loop while (whitespace-p (next my-parser))))
+  (loop for c of-type character = (next my-parser) then (next my-parser)
+	while (whitespace-p c)
+	finally (return c)))
 
 (defun consume-exact (my-parser expect)
   (declare (type simple-string-parser my-parser))
@@ -90,8 +85,7 @@
   (loop for c across expect
 	do (if (char= c (peek my-parser))
 	       (next my-parser)
-	       (error (format t "expected ~A" c)))
-	finally (return (pos my-parser))))
+	       (error (format t "expected ~A" c)))))
 
 (defstruct json-stack
   (contents (make-array 1024) :type (simple-vector 1024))
@@ -195,21 +189,26 @@
 
 (defun next-event (my-parser)
   (declare (type simple-string-parser my-parser))
-  (consume-whitespace my-parser)
-  (let ((start (pos my-parser)))
-    (case (current my-parser)
-      (#\t (values :true start (consume-exact my-parser "rue")))
-      (#\f (values :false start (consume-exact my-parser "alse")))
-      (#\n (values :null start (consume-exact my-parser "ull")))
-      (#\, (values :end-item start start))
-      (#\: (values :end-key start start))
-      ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number start my-parser))
-      (#\" (consume-string start my-parser))
-      (#\{ (values :start-object start start))
-      (#\} (values :end-object start start))
-      (#\[ (values :start-array start start))
-      (#\] (values :end-array start start))
-      (#\Nul (values :eof -1 -1)))))
+  (case (consume-whitespace my-parser)
+    ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number my-parser))
+    (#\" (consume-string my-parser))
+    (#\t
+     (consume-exact my-parser "rue")
+     (values :true -1 -1))
+    (#\f
+     (consume-exact my-parser "alse")
+     (values :false -1 -1))
+    (#\n
+     (consume-exact my-parser "ull")
+     (values :null -1 -1))
+    
+    (#\, (values :end-item -1 -1))
+    (#\: (values :end-key -1 -1))      
+    (#\{ (values :start-object -1 -1))
+    (#\} (values :end-object -1 -1))
+    (#\[ (values :start-array -1 -1))
+    (#\] (values :end-array -1 -1))
+    (#\Nul (values :eof -1 -1))))
 
 (defun decode-event (src)
   (let ((stack (make-json-stack))
@@ -224,6 +223,7 @@
 		 (:true (json-stack-push stack :true))
 		 (:false (json-stack-push stack :false))
 		 (:null (json-stack-push stack :null))
+
 		 (:integer
 		  (json-stack-push stack (parse-integer (read-buffer my-parser) :start start :end (1+ end))))
 		 
