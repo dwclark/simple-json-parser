@@ -2,26 +2,26 @@
 
 (declaim (optimize (speed 3) (debug 0) (safety 0)))
 
-(defstruct (simple-string-parser (:conc-name ""))
+(declaim (inline str-parser-next str-parser-peek str-parser-read-buffer str-parser-pos
+		 whitespace-p consume-whitespace consume-exact consume-string next-event
+		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
+		 json-stack-push-object json-stack-pop-array json-stack-pop-object
+		 json-stack-validate-key json-stack-contents json-stack-location))
+
+(defstruct str-parser
   (read-buffer "" :type simple-string)
   (pos -1 :type fixnum))
 
-(declaim (inline next peek whitespace-p consume-whitespace consume-exact
-		 consume-string
-		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
-		 json-stack-push-object json-stack-pop-array json-stack-pop-object
-		 json-stack-validate-key next-event))
-
-(defun next (parser)
-  (declare (type simple-string-parser parser))
-  (if (< (incf (pos parser)) (length (read-buffer parser)))
-      (aref (read-buffer parser) (pos parser))
+(defun str-parser-next (parser)
+  (declare (type str-parser parser))
+  (if (< (incf (str-parser-pos parser)) (length (str-parser-read-buffer parser)))
+      (aref (str-parser-read-buffer parser) (str-parser-pos parser))
       #\Nul))
 
-(defun peek (parser)
-  (declare (type simple-string-parser parser))
-  (if (< (1+ (pos parser)) (length (read-buffer parser)))
-      (aref (read-buffer parser) (1+ (pos parser)))
+(defun str-parser-peek (parser)
+  (declare (type str-parser parser))
+  (if (< (1+ (str-parser-pos parser)) (length (str-parser-read-buffer parser)))
+      (aref (str-parser-read-buffer parser) (1+ (str-parser-pos parser)))
       #\Nul))
 
 (defun whitespace-p (c)
@@ -31,60 +31,60 @@
     (otherwise nil)))
 
 (defun consume-number (my-parser)
-  (declare (type simple-string-parser my-parser))
-  (let ((start (the fixnum (pos my-parser))))
-    (loop while (digit-char-p (peek my-parser))
-	  do (next my-parser))
+  (declare (type str-parser my-parser))
+  (let ((start (the fixnum (str-parser-pos my-parser))))
+    (loop while (digit-char-p (str-parser-peek my-parser))
+	  do (str-parser-next my-parser))
     
-    (let ((c (peek my-parser)))
+    (let ((c (str-parser-peek my-parser)))
       (when (or (whitespace-p c) (char= c #\,) (char= c #\]) (char= c #\}) (char= c #\Nul))
-	(return-from consume-number (values :integer start (pos my-parser)))))
+	(return-from consume-number (values :integer start (str-parser-pos my-parser)))))
     
-    (when (char= #\. (peek my-parser))
-      (next my-parser)
-      (if (digit-char-p (peek my-parser))
-	  (loop while (digit-char-p (peek my-parser))
-		do (next my-parser))
+    (when (char= #\. (str-parser-peek my-parser))
+      (str-parser-next my-parser)
+      (if (digit-char-p (str-parser-peek my-parser))
+	  (loop while (digit-char-p (str-parser-peek my-parser))
+		do (str-parser-next my-parser))
 	  (error "expected digits")))
     
-    (when (char-equal #\e (peek my-parser))
-      (next my-parser)
-      (when (or (char= #\+ (peek my-parser))
-		(char= #\- (peek my-parser)))
-	(next my-parser))
-      (if (digit-char-p (peek my-parser))
-	  (loop while (digit-char-p (peek my-parser))
-		do (next my-parser))
+    (when (char-equal #\e (str-parser-peek my-parser))
+      (str-parser-next my-parser)
+      (when (or (char= #\+ (str-parser-peek my-parser))
+		(char= #\- (str-parser-peek my-parser)))
+	(str-parser-next my-parser))
+      (if (digit-char-p (str-parser-peek my-parser))
+	  (loop while (digit-char-p (str-parser-peek my-parser))
+		do (str-parser-next my-parser))
 	  (error "expected digits")))
     
-    (values :float start (pos my-parser))))
+    (values :float start (str-parser-pos my-parser))))
 
 (defun consume-string (my-parser)
-  (declare (type simple-string-parser my-parser))
-  (loop with start of-type fixnum = (pos my-parser)
+  (declare (type str-parser my-parser))
+  (loop with start of-type fixnum = (str-parser-pos my-parser)
 	with event-type = :string
 	with prev of-type character = #\Nul
-	for c of-type character = (next my-parser) then (next my-parser)
+	for c of-type character = (str-parser-next my-parser) then (str-parser-next my-parser)
 	until (and (char= #\" c) (not (char= #\\ prev)))
 	do (if (char= #\\ c)
-	       (case (peek my-parser)
+	       (case (str-parser-peek my-parser)
 		 ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
 		 (otherwise (error "Expecting escape sequence"))))
 	   (setf prev c)
-	finally (return (values event-type start (pos my-parser)))))
+	finally (return (values event-type start (str-parser-pos my-parser)))))
 
 (defun consume-whitespace (my-parser)
-  (declare (type simple-string-parser my-parser))
-  (loop for c of-type character = (next my-parser) then (next my-parser)
+  (declare (type str-parser my-parser))
+  (loop for c of-type character = (str-parser-next my-parser) then (str-parser-next my-parser)
 	while (whitespace-p c)
 	finally (return c)))
 
 (defun consume-exact (my-parser expect)
-  (declare (type simple-string-parser my-parser))
+  (declare (type str-parser my-parser))
   (declare (type simple-string expect))
   (loop for c across expect
-	do (if (char= c (peek my-parser))
-	       (next my-parser)
+	do (if (char= c (str-parser-peek my-parser))
+	       (str-parser-next my-parser)
 	       (error (format t "expected ~A" c)))))
 
 (defstruct json-stack
@@ -188,7 +188,7 @@
 	finally (return ret)))
 
 (defun next-event (my-parser)
-  (declare (type simple-string-parser my-parser))
+  (declare (type str-parser my-parser))
   (case (consume-whitespace my-parser)
     ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number my-parser))
     (#\" (consume-string my-parser))
@@ -213,10 +213,8 @@
 (defun decode-event (src)
   (let* ((stack (make-json-stack))
 	 (*read-default-float-format* 'double-float)
-	 (read-buffer (etypecase src
-			(simple-string src)))
 	 (my-parser (etypecase src
-		      (simple-string (make-simple-string-parser :read-buffer read-buffer)))))
+		      (simple-string (make-str-parser :read-buffer src)))))
     
     (loop do (multiple-value-bind (evt start end) (next-event my-parser)
 	       (declare (type symbol evt))
@@ -227,16 +225,16 @@
 		 (:null (json-stack-push stack :null))
 
 		 (:integer
-		  (json-stack-push stack (parse-integer read-buffer :start start :end (1+ end))))
+		  (json-stack-push stack (parse-integer (str-parser-read-buffer my-parser) :start start :end (1+ end))))
 		 
 		 (:float
-		  (json-stack-push stack (read-from-string read-buffer t #\Nul :start start :end (1+ end))))
+		  (json-stack-push stack (read-from-string (str-parser-read-buffer my-parser) t #\Nul :start start :end (1+ end))))
 		 
 		 (:string
-		  (json-stack-push stack (subseq read-buffer (1+ start) end)))
+		  (json-stack-push stack (subseq (str-parser-read-buffer my-parser) (1+ start) end)))
 
 		 (:escaped-string
-		  (json-stack-push stack (json-string-unencode read-buffer (1+ start) end)))
+		  (json-stack-push stack (json-string-unencode (str-parser-read-buffer my-parser) (1+ start) end)))
 		 
 		 (:start-object
 		  (json-stack-push-object stack))
