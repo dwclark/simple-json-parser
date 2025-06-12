@@ -2,7 +2,7 @@
 
 (declaim (optimize (speed 3) (debug 0) (safety 0)))
 
-(declaim (inline str-parser-read-buffer str-parser-pos str-parser-move-next str-parser-current str-parser-next
+(declaim (inline str-parser-read-buffer str-parser-pos str-parser-move-next str-parser-current str-parser-next str-parser-reset
 		 whitespace-p consume-whitespace consume-exact consume-string consume-number next-event
 		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
 		 json-stack-push-object json-stack-pop-array json-stack-pop-object
@@ -19,93 +19,53 @@
 (defun str-parser-current (parser)
   (declare (type str-parser parser))
   (if (< (str-parser-pos parser) (array-total-size (str-parser-read-buffer parser)))
-      (aref (str-parser-read-buffer parser) (str-parser-pos parser))
+      (schar (str-parser-read-buffer parser) (str-parser-pos parser))
       #\Nul))
 
 (defun str-parser-next (parser)
   (declare (type str-parser parser))
   (if (< (incf (str-parser-pos parser)) (array-total-size (str-parser-read-buffer parser)))
-      (aref (str-parser-read-buffer parser) (str-parser-pos parser))
+      (schar (str-parser-read-buffer parser) (str-parser-pos parser))
       #\Nul))
 
+(defun str-parser-reset (parser)
+  (declare (ignore parser)))
+
+(defstruct stm-parser
+  (read-buffer (make-string 512) :type simple-string)
+  (pos -1 :type fixnum)
+  (stm nil :type stream))
+
+(defun stm-parser-current (parser)
+  (declare (type stm-parser parser))
+  (schar (stm-parser-read-buffer parser) (stm-parser-pos parser)))
+
+(defun stm-parser-move-next (parser)
+  (declare (type stm-parser parser))
+  (when (= (1+ (stm-parser-pos parser)) (array-total-size (stm-parser-read-buffer parser)))
+    (loop with old of-type simple-string = (stm-parser-read-buffer parser)
+	  with new of-type simple-string = (make-string (+ 512 (array-total-size old)))
+	  for i from 0 below (array-total-size old)
+	  do (setf (schar new i) (schar old i))
+	  finally (setf (stm-parser-read-buffer parser) new)))
+  (incf (stm-parser-pos parser))
+  (setf (schar (stm-parser-read-buffer parser) (stm-parser-pos parser))
+	(read-char (stm-parser-stm parser) nil #\Nul)))
+  
+(defun stm-parser-next (parser)
+  (declare (type stm-parser parser))
+  (stm-parser-move-next parser))
+
+(defun stm-parser-reset (parser)
+  (declare (type stm-parser parser))
+  (setf (schar (stm-parser-read-buffer parser) 0) (stm-parser-current parser))
+  (setf (stm-parser-pos parser) 0))
+   
 (defun whitespace-p (c)
   (declare (type character c))
   (case c
     ((#\Space #\Tab #\Return #\Linefeed) t)
     (otherwise nil)))
-
-(defun consume-number (my-parser)
-  (declare (type str-parser my-parser))
-  (let ((start (the fixnum (str-parser-pos my-parser)))
-	(current (the character (str-parser-current my-parser))))
-
-    (when (or (char= #\+ current) (char= #\- current))
-      (setf current (str-parser-next my-parser)))
-
-    (when (not (digit-char-p current))
-      (error "bare +/- sign found"))
-      
-    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
-    
-    (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
-      (return-from consume-number (values :integer start (1- (str-parser-pos my-parser)))))
-    
-    (when (char= #\. current)
-      (setf current (str-parser-next my-parser))
-      (if (not (digit-char-p current))
-	  (error "expected digits")))
-    
-    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
-    
-    (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
-      (return-from consume-number (values :float start (1- (str-parser-pos my-parser)))))
-
-    (when (not (char-equal #\e current))
-      (error "expected 'e' character"))
-
-    (setf current (str-parser-next my-parser))
-    (when (or (char= #\+ current) (char= #\- current))
-      (setf current (str-parser-next my-parser))
-      (if (not (digit-char-p current))
-	  (error "expected digits")))
-
-    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
-    
-    (if (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
-	(values :float start (1- (str-parser-pos my-parser)))
-	(error "expected digits"))))
-
-(defun consume-string (my-parser)
-  (declare (type str-parser my-parser))
-  (loop with start of-type fixnum = (str-parser-pos my-parser)
-	with end of-type fixnum = 0
-	with event-type = :string
-	with prev of-type character = #\Nul
-	for c of-type character = (str-parser-next my-parser) then (str-parser-next my-parser)
-	until (and (char= #\" c) (not (char= #\\ prev)))
-	do (when (char= #\\ c)
-	     (setf c (str-parser-next my-parser))
-	     (case c
-	       ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
-	       (otherwise (error "Expecting escape sequence"))))
-	   (setf prev c)
-	finally (setf end (str-parser-pos my-parser))
-		(str-parser-move-next my-parser)
-		(return (values event-type start end))))
-
-(defun consume-whitespace (my-parser)
-  (declare (type str-parser my-parser))
-  (loop for c of-type character = (str-parser-current my-parser) then (str-parser-next my-parser)
-	while (whitespace-p c)
-	finally (return c)))
-
-(defun consume-exact (my-parser expect)
-  (declare (type str-parser my-parser))
-  (declare (type simple-string expect))
-  (loop for c across expect
-	do (if (not (char= c (str-parser-next my-parser)))
-	       (error (format t "expected ~A" c)))
-	finally (str-parser-move-next my-parser)))
 
 (defstruct json-stack
   (contents (make-array 1024) :type (simple-vector 1024))
@@ -207,6 +167,79 @@
 	       (otherwise (vector-push-extend current ret))))
 	finally (return ret)))
 
+(defun consume-number (my-parser)
+  (declare (type str-parser my-parser))
+  (let ((start (the fixnum (str-parser-pos my-parser)))
+	(current (the character (str-parser-current my-parser))))
+
+    (when (or (char= #\+ current) (char= #\- current))
+      (setf current (str-parser-next my-parser)))
+
+    (when (not (digit-char-p current))
+      (error "bare +/- sign found"))
+      
+    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
+    
+    (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
+      (return-from consume-number (values :integer start (1- (str-parser-pos my-parser)))))
+    
+    (when (char= #\. current)
+      (setf current (str-parser-next my-parser))
+      (if (not (digit-char-p current))
+	  (error "expected digits")))
+    
+    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
+    
+    (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
+      (return-from consume-number (values :float start (1- (str-parser-pos my-parser)))))
+
+    (when (not (char-equal #\e current))
+      (error "expected 'e' character"))
+
+    (setf current (str-parser-next my-parser))
+    (when (or (char= #\+ current) (char= #\- current))
+      (setf current (str-parser-next my-parser))
+      (if (not (digit-char-p current))
+	  (error "expected digits")))
+
+    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
+    
+    (if (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
+	(values :float start (1- (str-parser-pos my-parser)))
+	(error "expected digits"))))
+
+(defun consume-string (my-parser)
+  (declare (type str-parser my-parser))
+  (loop with start of-type fixnum = (str-parser-pos my-parser)
+	with end of-type fixnum = 0
+	with event-type = :string
+	with prev of-type character = #\Nul
+	for c of-type character = (str-parser-next my-parser) then (str-parser-next my-parser)
+	until (and (char= #\" c) (not (char= #\\ prev)))
+	do (when (char= #\\ c)
+	     (setf c (str-parser-next my-parser))
+	     (case c
+	       ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
+	       (otherwise (error "Expecting escape sequence"))))
+	   (setf prev c)
+	finally (setf end (str-parser-pos my-parser))
+		(str-parser-move-next my-parser)
+		(return (values event-type start end))))
+
+(defun consume-whitespace (my-parser)
+  (declare (type str-parser my-parser))
+  (loop for c of-type character = (str-parser-current my-parser) then (str-parser-next my-parser)
+	while (whitespace-p c)
+	finally (return c)))
+
+(defun consume-exact (my-parser expect)
+  (declare (type str-parser my-parser))
+  (declare (type simple-string expect))
+  (loop for c across expect
+	do (if (not (char= c (str-parser-next my-parser)))
+	       (error (format t "expected ~A" c)))
+	finally (str-parser-move-next my-parser)))
+
 (defun next-event (my-parser)
   (declare (type str-parser my-parser))
   (ecase (consume-whitespace my-parser)
@@ -245,16 +278,20 @@
 		 (:null (json-stack-push stack :null))
 
 		 (:integer
-		  (json-stack-push stack (parse-integer (str-parser-read-buffer my-parser) :start start :end (1+ end))))
+		  (json-stack-push stack (parse-integer (str-parser-read-buffer my-parser) :start start :end (1+ end)))
+		  (str-parser-reset my-parser))
 		 
 		 (:float
-		  (json-stack-push stack (read-from-string (str-parser-read-buffer my-parser) t #\Nul :start start :end (1+ end))))
+		  (json-stack-push stack (read-from-string (str-parser-read-buffer my-parser) t #\Nul :start start :end (1+ end)))
+		  (str-parser-reset my-parser))
 		 
 		 (:string
-		  (json-stack-push stack (subseq (str-parser-read-buffer my-parser) (1+ start) end)))
+		  (json-stack-push stack (subseq (str-parser-read-buffer my-parser) (1+ start) end))
+		  (str-parser-reset my-parser))
 
 		 (:escaped-string
-		  (json-stack-push stack (json-string-unencode (str-parser-read-buffer my-parser) (1+ start) end)))
+		  (json-stack-push stack (json-string-unencode (str-parser-read-buffer my-parser) (1+ start) end))
+		  (str-parser-reset my-parser))
 		 
 		 (:start-object
 		  (json-stack-push-object stack))
