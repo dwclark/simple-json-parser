@@ -1,7 +1,7 @@
 (defpackage :simple-json-parser
   (:nicknames :sjp)
   (:use #:cl)
-  (:export #:decode #:encode #:decode-event))
+  (:export #:decode #:encode #:decode-event #:define-json-decoder))
 
 (in-package :simple-json-parser)
 

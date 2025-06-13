@@ -9,17 +9,24 @@
 (defparameter *resources* (asdf:system-relative-pathname "simple-json-parser-tests" "test/resources"))
 (defparameter *test-json-files* "/home/david/Sources/JSONTestSuite/test_parsing")
 
+(define-json-decoder decode-event :type simple-string)
+(define-json-decoder decode-from-stream :type stream)
+
 (defun get-test-resource (s)
   (format nil "~A/~A" *resources* s))
-  
+
+(defun wrap-stream (s)
+  (with-input-from-string (stm s)
+    (decode-from-stream stm)))
+
 (test test-decode-constants
-  (loop for func in (list #'decode #'decode-event)
+  (loop for func in (list #'decode #'decode-event #'wrap-stream)
 	do (is (eq :true (funcall func "true")))
 	   (is (eq :false (funcall func "false")))
 	   (is (eq :null (funcall func "null")))))
 
 (test test-decode-numbers
-  (loop for func in (list #'decode #'decode-event)
+  (loop for func in (list #'decode #'decode-event #'wrap-stream)
 	do (is (= 1 (funcall func "1")))
 	   (is (= 123 (funcall func "123")))
 	   (is (equalp 1e10 (funcall func "1e10")))
@@ -33,7 +40,7 @@
 	   (is (zerop (funcall func "-0")))))
 
 (test test-decode-string
-  (loop for func in (list #'decode #'decode-event)
+  (loop for func in (list #'decode #'decode-event #'wrap-stream)
 	do (is (string= "foo" (funcall func "\"foo\"")))
 	   (is (string= (funcall func "\"fo\\no\"") (make-array 4 :element-type 'character :initial-contents '(#\f #\o #\Linefeed #\o))))
 	   (is (string= (funcall func "\"t\\tab\"") (make-array 4 :element-type 'character :initial-contents '(#\t #\Tab #\a #\b))))
@@ -41,7 +48,7 @@
 	   (is (string= "foo" (funcall func "\"\\u0066\\u006F\\u006F\"")))))
 
 (test test-decode-array
-  (loop for func in (list #'decode #'decode-event)
+  (loop for func in (list #'decode #'decode-event #'wrap-stream)
 	do (is (equalp #() (funcall func "[]")))
 	   (is (equalp #() (funcall func "[         ]")))
 	   (is (equalp #(1 2 3) (funcall func "[1,2,3]")))
@@ -64,7 +71,7 @@
 	finally (return t)))
 
 (test test-decode-object
-  (loop for func in (list #'decode #'decode-event)
+  (loop for func in (list #'decode #'decode-event #'wrap-stream)
 	do (is (expected-hash-table-p '() (funcall func "{}")))
 	   (is (expected-hash-table-p '(("foo" . 1)) (funcall func "{ \"foo\": 1 }")))
 	   (is (expected-hash-table-p '(("foo" . #(1 2 3)) ("1" . ("key" . 100)))
