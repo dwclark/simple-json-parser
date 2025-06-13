@@ -3,7 +3,7 @@
 (declaim (optimize (speed 3) (debug 0) (safety 0)))
 
 (declaim (inline str-parser-read-buffer str-parser-pos str-parser-move-next str-parser-current str-parser-next str-parser-reset
-		 whitespace-p consume-whitespace consume-exact consume-string consume-number next-event
+		 whitespace-p json-stack-pop-item
 		 json-stack-push json-stack-at json-stack-pop json-stack-push-array
 		 json-stack-push-object json-stack-pop-array json-stack-pop-object
 		 json-stack-validate-key json-stack-contents json-stack-location))
@@ -167,151 +167,149 @@
 	       (otherwise (vector-push-extend current ret))))
 	finally (return ret)))
 
-(defun consume-number (my-parser)
-  (declare (type str-parser my-parser))
-  (let ((start (the fixnum (str-parser-pos my-parser)))
-	(current (the character (str-parser-current my-parser))))
-
-    (when (or (char= #\+ current) (char= #\- current))
-      (setf current (str-parser-next my-parser)))
-
-    (when (not (digit-char-p current))
-      (error "bare +/- sign found"))
-      
-    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
-    
-    (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
-      (return-from consume-number (values :integer start (1- (str-parser-pos my-parser)))))
-    
-    (when (char= #\. current)
-      (setf current (str-parser-next my-parser))
-      (if (not (digit-char-p current))
-	  (error "expected digits")))
-    
-    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
-    
-    (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
-      (return-from consume-number (values :float start (1- (str-parser-pos my-parser)))))
-
-    (when (not (char-equal #\e current))
-      (error "expected 'e' character"))
-
-    (setf current (str-parser-next my-parser))
-    (when (or (char= #\+ current) (char= #\- current))
-      (setf current (str-parser-next my-parser))
-      (if (not (digit-char-p current))
-	  (error "expected digits")))
-
-    (loop while (digit-char-p (setf current (str-parser-next my-parser))))
-    
-    (if (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
-	(values :float start (1- (str-parser-pos my-parser)))
-	(error "expected digits"))))
-
-(defun consume-string (my-parser)
-  (declare (type str-parser my-parser))
-  (loop with start of-type fixnum = (str-parser-pos my-parser)
-	with end of-type fixnum = 0
-	with event-type = :string
-	with prev of-type character = #\Nul
-	for c of-type character = (str-parser-next my-parser) then (str-parser-next my-parser)
-	until (and (char= #\" c) (not (char= #\\ prev)))
-	do (when (char= #\\ c)
-	     (setf c (str-parser-next my-parser))
-	     (case c
-	       ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
-	       (otherwise (error "Expecting escape sequence"))))
-	   (setf prev c)
-	finally (setf end (str-parser-pos my-parser))
-		(str-parser-move-next my-parser)
-		(return (values event-type start end))))
-
-(defun consume-whitespace (my-parser)
-  (declare (type str-parser my-parser))
-  (loop for c of-type character = (str-parser-current my-parser) then (str-parser-next my-parser)
-	while (whitespace-p c)
-	finally (return c)))
-
-(defun consume-exact (my-parser expect)
-  (declare (type str-parser my-parser))
-  (declare (type simple-string expect))
-  (loop for c across expect
-	do (if (not (char= c (str-parser-next my-parser)))
-	       (error (format t "expected ~A" c)))
-	finally (str-parser-move-next my-parser)))
-
-(defun next-event (my-parser)
-  (declare (type str-parser my-parser))
-  (ecase (consume-whitespace my-parser)
-    ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number my-parser))
-    (#\" (consume-string my-parser))
-    (#\t
-     (consume-exact my-parser "rue")
-     (values :true -1 -1))
-    (#\f
-     (consume-exact my-parser "alse")
-     (values :false -1 -1))
-    (#\n
-     (consume-exact my-parser "ull")
-     (values :null -1 -1))
-    
-    (#\, (str-parser-move-next my-parser) (values :end-item -1 -1))
-    (#\: (str-parser-move-next my-parser) (values :end-key -1 -1))      
-    (#\{ (str-parser-move-next my-parser) (values :start-object -1 -1))
-    (#\} (str-parser-move-next my-parser) (values :end-object -1 -1))
-    (#\[ (str-parser-move-next my-parser) (values :start-array -1 -1))
-    (#\] (str-parser-move-next my-parser) (values :end-array -1 -1))
-    (#\Nul (values :eof -1 -1))))
-
 (defun decode-event (src)
   (let* ((stack (make-json-stack))
 	 (*read-default-float-format* 'double-float)
 	 (my-parser (etypecase src
 		      (simple-string (make-str-parser :read-buffer src :pos 0)))))
+
+    (declare (inline consume-string consume-number consume-whitespace consume-exact next-event))
+    (declare (type str-parser my-parser))
     
-    (loop do (multiple-value-bind (evt start end) (next-event my-parser)
-	       (declare (type symbol evt))
-	       (declare (type fixnum start end))
-	       (ecase evt
-		 (:true (json-stack-push stack :true))
-		 (:false (json-stack-push stack :false))
-		 (:null (json-stack-push stack :null))
+    (labels ((consume-number (my-parser)
+	       (let ((start (the fixnum (str-parser-pos my-parser)))
+		     (current (the character (str-parser-current my-parser))))
+		 
+		 (when (or (char= #\+ current) (char= #\- current))
+		   (setf current (str-parser-next my-parser)))
+		 
+		 (when (not (digit-char-p current))
+		   (error "bare +/- sign found"))
+		 
+		 (loop while (digit-char-p (setf current (str-parser-next my-parser))))
+		 
+		 (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
+		   (return-from consume-number (values :integer start (1- (str-parser-pos my-parser)))))
+		 
+		 (when (char= #\. current)
+		   (setf current (str-parser-next my-parser))
+		   (if (not (digit-char-p current))
+		       (error "expected digits")))
+		 
+		 (loop while (digit-char-p (setf current (str-parser-next my-parser))))
+		 
+		 (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
+		   (return-from consume-number (values :float start (1- (str-parser-pos my-parser)))))
+		 
+		 (when (not (char-equal #\e current))
+		   (error "expected 'e' character"))
+		 
+		 (setf current (str-parser-next my-parser))
+		 (when (or (char= #\+ current) (char= #\- current))
+		   (setf current (str-parser-next my-parser))
+		   (if (not (digit-char-p current))
+		       (error "expected digits")))
+		 
+		 (loop while (digit-char-p (setf current (str-parser-next my-parser))))
+		 
+		 (if (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
+		     (values :float start (1- (str-parser-pos my-parser)))
+		     (error "expected digits"))))
 
-		 (:integer
-		  (json-stack-push stack (parse-integer (str-parser-read-buffer my-parser) :start start :end (1+ end)))
-		  (str-parser-reset my-parser))
-		 
-		 (:float
-		  (json-stack-push stack (read-from-string (str-parser-read-buffer my-parser) t #\Nul :start start :end (1+ end)))
-		  (str-parser-reset my-parser))
-		 
-		 (:string
-		  (json-stack-push stack (subseq (str-parser-read-buffer my-parser) (1+ start) end))
-		  (str-parser-reset my-parser))
+	     (consume-string (my-parser)
+	       (loop with start of-type fixnum = (str-parser-pos my-parser)
+		     with end of-type fixnum = 0
+		     with event-type = :string
+		     with prev of-type character = #\Nul
+		     for c of-type character = (str-parser-next my-parser) then (str-parser-next my-parser)
+		     until (and (char= #\" c) (not (char= #\\ prev)))
+		     do (when (char= #\\ c)
+			  (setf c (str-parser-next my-parser))
+			  (case c
+			    ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
+			    (otherwise (error "Expecting escape sequence"))))
+			(setf prev c)
+		     finally (setf end (str-parser-pos my-parser))
+			     (str-parser-move-next my-parser)
+			     (return (values event-type start end))))
 
-		 (:escaped-string
-		  (json-stack-push stack (json-string-unencode (str-parser-read-buffer my-parser) (1+ start) end))
-		  (str-parser-reset my-parser))
+	     (consume-whitespace (my-parser)
+	       (loop for c of-type character = (str-parser-current my-parser) then (str-parser-next my-parser)
+		     while (whitespace-p c)
+		     finally (return c)))
+
+	     (consume-exact (my-parser expect)
+	       (declare (type simple-string expect))
+	       (loop for c across expect
+		     do (if (not (char= c (str-parser-next my-parser)))
+			    (error (format t "expected ~A" c)))
+		     finally (str-parser-move-next my-parser)))
+
+	     (next-event (my-parser)
+	       (ecase (consume-whitespace my-parser)
+		 ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number my-parser))
+		 (#\" (consume-string my-parser))
+		 (#\t
+		  (consume-exact my-parser "rue")
+		  (values :true -1 -1))
+		 (#\f
+		  (consume-exact my-parser "alse")
+		  (values :false -1 -1))
+		 (#\n
+		  (consume-exact my-parser "ull")
+		  (values :null -1 -1))
 		 
-		 (:start-object
-		  (json-stack-push-object stack))
-		  
-		 (:end-key
-		  (json-stack-validate-key stack))
-		 
-		 (:end-item
-		  (json-stack-pop-item stack))
-		 
-		 (:end-object
-		  (json-stack-pop-object stack))
-		  
-		 (:start-array
-		  (json-stack-push-array stack))
-		 
-		 (:end-array
-		  (json-stack-pop-array stack))
-		 
-		 (:eof
-		  (if (zerop (json-stack-location stack))
-		      (return (json-stack-pop stack))
-		      (error "unexpected eof"))))))))
+		 (#\, (str-parser-move-next my-parser) (values :end-item -1 -1))
+		 (#\: (str-parser-move-next my-parser) (values :end-key -1 -1))      
+		 (#\{ (str-parser-move-next my-parser) (values :start-object -1 -1))
+		 (#\} (str-parser-move-next my-parser) (values :end-object -1 -1))
+		 (#\[ (str-parser-move-next my-parser) (values :start-array -1 -1))
+		 (#\] (str-parser-move-next my-parser) (values :end-array -1 -1))
+		 (#\Nul (values :eof -1 -1)))))
+      
+      (loop do (multiple-value-bind (evt start end) (next-event my-parser)
+		 (declare (type symbol evt))
+		 (declare (type fixnum start end))
+		 (ecase evt
+		   (:true (json-stack-push stack :true))
+		   (:false (json-stack-push stack :false))
+		   (:null (json-stack-push stack :null))
+		   
+		   (:integer
+		    (json-stack-push stack (parse-integer (str-parser-read-buffer my-parser) :start start :end (1+ end)))
+		    (str-parser-reset my-parser))
+		   
+		   (:float
+		    (json-stack-push stack (read-from-string (str-parser-read-buffer my-parser) t #\Nul :start start :end (1+ end)))
+		    (str-parser-reset my-parser))
+		   
+		   (:string
+		    (json-stack-push stack (subseq (str-parser-read-buffer my-parser) (1+ start) end))
+		    (str-parser-reset my-parser))
+		   
+		   (:escaped-string
+		    (json-stack-push stack (json-string-unencode (str-parser-read-buffer my-parser) (1+ start) end))
+		    (str-parser-reset my-parser))
+		   
+		   (:start-object
+		    (json-stack-push-object stack))
+		   
+		   (:end-key
+		    (json-stack-validate-key stack))
+		   
+		   (:end-item
+		    (json-stack-pop-item stack))
+		   
+		   (:end-object
+		    (json-stack-pop-object stack))
+		   
+		   (:start-array
+		    (json-stack-push-array stack))
+		   
+		   (:end-array
+		    (json-stack-pop-array stack))
+		   
+		   (:eof
+		    (if (zerop (json-stack-location stack))
+			(return (json-stack-pop stack))
+			(error "unexpected eof")))))))))
