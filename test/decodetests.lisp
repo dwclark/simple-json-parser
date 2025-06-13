@@ -39,6 +39,16 @@
 	   (is (zerop (funcall func "0")))
 	   (is (zerop (funcall func "-0")))))
 
+(test test-bad-numbers
+  (loop for func in (list #'decode-event #'wrap-stream)
+	do (loop for bad-string in (list "0.1.2" "2@")
+		 do (handler-case
+			(progn
+			  (funcall func bad-string)
+			  (is (eq :true :false)))
+		      (error (se)
+			(is (eq :true :true)))))))
+
 (test test-decode-string
   (loop for func in (list #'decode #'decode-event #'wrap-stream)
 	do (is (string= "foo" (funcall func "\"foo\"")))
@@ -80,7 +90,7 @@
 
 (test test-file-parsing
   (with-open-file (fstream (get-test-resource "large1.json"))
-    (let ((parsed (decode fstream)))
+    (let ((parsed (decode-from-stream fstream)))
       (flet ((correct-p (table)
 	       (and (= 22 (hash-table-count table))
 		    (= 3 (length (gethash "friends" table))))))
@@ -94,13 +104,13 @@
 
     (loop for file in '("128KB.json" "128KB-min.json")
 	  do (with-open-file (fstream (get-test-resource "128KB.json"))
-	       (let ((parsed (decode fstream)))
+	       (let ((parsed (decode-from-stream fstream)))
 		 (is (vectorp parsed))
 		 (is (= 788 (length parsed)))
 		 (is (every #'correct-p parsed))))))
 
   (with-open-file (fstream (get-test-resource "fruit.json"))
-    (let ((parsed (decode fstream)))
+    (let ((parsed (decode-from-stream fstream)))
       (flet ((correct-p (cell)
 	       (string= (cdr cell) (gethash (car cell) parsed))))
 	(is (hash-table-p parsed))
@@ -108,12 +118,12 @@
 	(is (every #'correct-p '(("fruit" . "Apple") ("size" . "Large") ("color" . "Red")))))))
 
   (with-open-file (fstream (get-test-resource "quiz.json"))
-    (let ((parsed (decode fstream)))
+    (let ((parsed (decode-from-stream fstream)))
       (is (string= "12" (gethash "answer" (gethash "q1" (gethash "maths" (gethash "quiz" parsed))))))
       (is (string= "4" (gethash "answer" (gethash "q2" (gethash "maths" (gethash "quiz" parsed))))))))
 
   (with-open-file (fstream (get-test-resource "constants.json"))
-    (let ((parsed (decode fstream)))
+    (let ((parsed (decode-from-stream fstream)))
       (is (eq :null (gethash "null" parsed)))
       (is (eq :true (gethash "true" parsed)))
       (is (eq :false (gethash "false" parsed))))))
@@ -121,7 +131,7 @@
 (test run-y-tests ()
   (dolist (path-name (directory (concatenate 'string *test-json-files* "/y*.json")))
     (with-open-file (fstream path-name)
-      (let ((parsed (decode fstream)))
+      (let ((parsed (decode-from-stream fstream)))
 	(is (eq :true :true))))))
 
 (test run-n-tests ()
@@ -129,7 +139,7 @@
     (with-open-file (fstream path-name)
       (handler-case
 	  (progn
-	    (decode fstream)
+	    (decode-from-stream fstream)
 	    (is (eq :true :false)))
 	(error (se)
 	  (is (eq :true :true)))))))

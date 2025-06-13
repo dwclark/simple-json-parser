@@ -70,7 +70,10 @@
 
 (defun json-stack-push (stack item)
   (declare (type json-stack stack))
-  (setf (aref (json-stack-contents stack) (incf (json-stack-location stack))) item))
+  (incf (json-stack-location stack))
+  (if (< (json-stack-location stack) 1024)
+      (setf (aref (json-stack-contents stack) (json-stack-location stack)) item)
+      (error "maximum nesting of 1024 reached")))
 
 (defun json-stack-at (stack i &optional (item nil item-supplied-p))
   (declare (type json-stack stack))
@@ -229,15 +232,14 @@
 		      (when (char= #\. current)
 			(setf current ,next-expr)
 			(if (not (digit-char-p current))
-			    (error "expected digits")))
-		      
-		      (loop while (digit-char-p (setf current ,next-expr)))
+			    (error "expected digits"))
+			(loop while (digit-char-p (setf current ,next-expr))))
 		      
 		      (when (or (whitespace-p current) (char= current #\,) (char= current #\]) (char= current #\}) (char= current #\Nul))
 			(return-from consume-number (values :float start (1- ,pos-expr))))
 		      
 		      (when (not (char-equal #\e current))
-			(error "expected 'e' character"))
+			(error (format nil "expected 'e' character, instead found ~A" current)))
 		      
 		      (setf current ,next-expr)
 		      (when (or (char= #\+ current) (char= #\- current))
@@ -258,11 +260,12 @@
 			  with prev of-type character = #\Nul
 			  for c of-type character = ,next-expr then ,next-expr
 			  until (and (char= #\" c) (not (char= #\\ prev)))
-			  do (when (char= #\\ c)
-			       (setf c ,next-expr)
-			       (case c
-				 ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
-				 (otherwise (error "Expecting escape sequence"))))
+			  do (case c
+			       (#\\ (setf c ,next-expr)
+				(case c
+				  ((#\" #\\ #\/ #\b #\f #\n #\r #\t #\u) (setf event-type :escaped-string))
+				  (otherwise (error "Expecting escape sequence"))))
+			       (#\Nul (error "expected characters, got eof")))
 			     (setf prev c)
 			  finally (setf end ,pos-expr)
 				  ,move-next-expr
@@ -277,11 +280,10 @@
 		    (declare (type simple-string expect))
 		    (loop for c across expect
 			  do (if (not (char= c ,next-expr))
-				 (error (format t "expected ~A" c)))
+				 (error (format nil "expected ~A" c)))
 			  finally ,move-next-expr))
 
 		  (next-event ()
-		    ;;(format t "in next-event, parser is ~A ~%" my-parser)
 		    (ecase (consume-whitespace)
 		      ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (consume-number))
 		      (#\" (consume-string))
