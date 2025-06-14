@@ -12,6 +12,7 @@
 (define-json-decoder decode-event :input-type simple-string)
 (define-json-decoder decode-from-stream :input-type stream)
 (define-json-decoder decode-str-to-event :input-type simple-string :output-type :event)
+(define-json-decoder decode-str-stream-array :input-type simple-string :output-type :stream-array)
 
 (defun get-test-resource (s)
   (format nil "~A/~A" *resources* s))
@@ -98,7 +99,30 @@
 		 :end-key :start-object :string :end-key :integer
 		 :end-object :end-object :eof)
 	       (reverse the-list)))))
-	       
+
+(test test-decode-str-stream-array
+  (let ((my-array (make-array 0 :adjustable t :fill-pointer t)))
+    (flet ((accum-item (item)
+	     (vector-push-extend item my-array)))
+      (decode-str-stream-array "[1,2,3]" #'accum-item)
+      (is (equalp #(1 2 3) my-array))
+      (setf (fill-pointer my-array) 0)
+
+      (decode-str-stream-array "[1, 2, \"foo\", 2.45]" #'accum-item)
+      (is (equalp #(1 2 "foo" 2.45d0) my-array))
+      (setf (fill-pointer my-array) 0)
+      
+      (decode-str-stream-array "[[1, 2], [3,4]]" #'accum-item)
+      (is (equalp #(#(1 2) #(3 4)) my-array))
+      (setf (fill-pointer my-array) 0)
+
+      (decode-str-stream-array "[{ \"foo\": [1,2], \"bar\": \"hello\"}]" #'accum-item)
+      (is (expected-hash-table-p '(("foo" . #(1 2)) ("bar" . "hello")) (vector-pop my-array)))
+
+      (decode-str-stream-array "[{ \"foo\": [1,2], \"bar\": \"hello\"}, { \"foo\": [1,2], \"bar\": \"hello\"}]" #'accum-item)
+      (is (expected-hash-table-p '(("foo" . #(1 2)) ("bar" . "hello")) (vector-pop my-array)))
+      (is (expected-hash-table-p '(("foo" . #(1 2)) ("bar" . "hello")) (vector-pop my-array))))))
+    
 
 (test test-file-parsing
   (with-open-file (fstream (get-test-resource "large1.json"))
@@ -173,5 +197,14 @@
   (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
     (dotimes (myvar 1024)
       (decode-event contents))
+    nil))
+
+(defun do-nothing (i j k)
+  (declare (ignore i j k)))
+
+(defun test-event-only-performance ()
+  (let ((contents (uiop:read-file-string (get-test-resource "128KB.json"))))
+    (dotimes (myvar 1024)
+      (decode-str-to-event contents #'do-nothing))
     nil))
 

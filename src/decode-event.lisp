@@ -5,7 +5,7 @@
 		 stm-parser-read-buffer stm-parser-pos stm-parser-move-next stm-parser-current stm-parser-next stm-parser-reset
 		 whitespace-p
 		 json-stack-pop-item json-stack-push json-stack-at json-stack-pop json-stack-push-array
-		 json-stack-push-object json-stack-pop-array json-stack-pop-object
+		 json-stack-push-object json-stack-pop-array json-stack-pop-object json-stack-pop-for-stream
 		 json-stack-validate-key json-stack-contents json-stack-location))
 
 (defstruct str-parser
@@ -121,6 +121,16 @@
 		(setf (gethash key table) value))
 	      (error "expected object element, found something else"))))))
 
+(defun json-stack-pop-for-stream (stack)
+  (declare (type json-stack stack))
+  (let ((array-cell (json-stack-at stack 0)))
+    (cond ((and (consp array-cell) (typep (car array-cell) 'array))
+	   (let ((array (car array-cell)))
+	     (vector-pop array)))
+	  ((typep array-cell 'array)
+	   (vector-pop array-cell))
+	  (t (error "error in trying to stream array")))))
+
 (defun json-stack-pop-array (stack)
   (declare (type json-stack stack))
   (let ((top-item (json-stack-at stack 0)))
@@ -202,61 +212,75 @@
 		      (stream `(stm-parser-next my-parser))))
 
 	 (true-event-expr (case output-type
-			    (:document `(json-stack-push stack :true))
+			    ((:document :stream-array) `(json-stack-push stack :true))
 			    (:event `(funcall processor evt start end))))
 
 	 (false-event-expr (case output-type			     
-			     (:document `(json-stack-push stack :false))
+			     ((:document :stream-array) `(json-stack-push stack :false))
 			     (:event `(funcall processor evt start end))))
 
 	 (null-event-expr (case output-type
-			    (:document `(json-stack-push stack :null))
+			    ((:document :stream-array) `(json-stack-push stack :null))
 			    (:event `(funcall processor evt start end))))
 
 	 (integer-event-expr (case output-type
-			       (:document `(json-stack-push stack (parse-integer ,read-buffer-expr :start start :end (1+ end))))
+			       ((:document :stream-array)
+				`(json-stack-push stack (parse-integer ,read-buffer-expr :start start :end (1+ end))))
 			       (:event `(funcall processor evt start end))))
 
 	 (float-event-expr (case output-type
-			     (:document `(json-stack-push stack (read-from-string ,read-buffer-expr t #\Nul :start start :end (1+ end))))
+			     ((:document :stream-array)
+			      `(json-stack-push stack (read-from-string ,read-buffer-expr t #\Nul :start start :end (1+ end))))
 			     (:event `(funcall processor evt start end))))
 
 	 (string-event-expr (case output-type
-			      (:document `(json-stack-push stack (subseq ,read-buffer-expr (1+ start) end)))
+			      ((:document :stream-array) `(json-stack-push stack (subseq ,read-buffer-expr (1+ start) end)))
 			      (:event `(funcall processor evt start end))))
 	 
 	 (escaped-string-event-expr (case output-type
-				      (:document `(json-stack-push stack (json-string-unencode ,read-buffer-expr (1+ start) end)))
+				      ((:document :stream-array)
+				       `(json-stack-push stack (json-string-unencode ,read-buffer-expr (1+ start) end)))
 				      (:event `(funcall processor evt start end))))
 
 	 (start-object-event-expr (case output-type
-				    (:document `(json-stack-push-object stack))
+				    ((:document :stream-array) `(json-stack-push-object stack))
 				    (:event `(funcall processor evt start end))))
 
 	 (end-key-event-expr (case output-type
-			       (:document `(json-stack-validate-key stack))
+			       ((:document :stream-array) `(json-stack-validate-key stack))
 			       (:event `(funcall processor evt start end))))
-			
+	 
 	 (end-item-event-expr (case output-type
 				(:document `(json-stack-pop-item stack))
+				(:stream-array
+				 `(progn
+				    (json-stack-pop-item stack)
+				    (if (zerop (json-stack-location stack))
+					(funcall processor (json-stack-pop-for-stream stack)))))
 				(:event `(funcall processor evt start end))))
 
 	 (end-object-event-expr (case output-type
-				  (:document `(json-stack-pop-object stack))
+				  ((:document :stream-array) `(json-stack-pop-object stack))
 				  (:event `(funcall processor evt start end))))
 
 	 (start-array-event-expr (case output-type
-				   (:document `(json-stack-push-array stack))
+				   ((:document :stream-array) `(json-stack-push-array stack))
 				   (:event `(funcall processor evt start end))))
-
+	 
 	 (end-array-event-expr (case output-type
 				 (:document `(json-stack-pop-array stack))
+				 (:stream-array
+				  `(progn
+				     (json-stack-pop-array stack)
+				     (if (zerop (json-stack-location stack))
+					 (funcall processor (json-stack-pop-for-stream stack)))))
 				 (:event `(funcall processor evt start end))))
 
 	 (eof-event-expr (case output-type
 			   (:document `(if (zerop (json-stack-location stack))
 					   (return (json-stack-pop stack))
 					   (error "unexpected eof")))
+			   (:stream-array `(return nil))
 			   (:event `(progn
 				      (funcall processor evt start end)
 				      (return nil)))))
