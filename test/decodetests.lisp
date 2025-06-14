@@ -9,8 +9,9 @@
 (defparameter *resources* (asdf:system-relative-pathname "simple-json-parser-tests" "test/resources"))
 (defparameter *test-json-files* "/home/david/Sources/JSONTestSuite/test_parsing")
 
-(define-json-decoder decode-event :type simple-string)
-(define-json-decoder decode-from-stream :type stream)
+(define-json-decoder decode-event :input-type simple-string)
+(define-json-decoder decode-from-stream :input-type stream)
+(define-json-decoder decode-str-to-event :input-type simple-string :output-type :event)
 
 (defun get-test-resource (s)
   (format nil "~A/~A" *resources* s))
@@ -87,6 +88,17 @@
 	   (is (expected-hash-table-p '(("foo" . #(1 2 3)) ("1" . ("key" . 100)))
 				      (funcall func "{ \"foo\": [1,2,3], \"1\": { \"key\": 100 } }")))))
 
+(test test-str-to-event
+  (let ((the-list nil))
+    (decode-str-to-event "{ \"foo\": [1,2,3], \"1\": { \"key\": 100 } }"
+			 #'(lambda (evt start end)
+			     (push evt the-list)))
+    (is (equal '(:start-object :string :end-key :start-array :integer :end-item
+		 :integer :end-item :integer :end-array :end-item :string
+		 :end-key :start-object :string :end-key :integer
+		 :end-object :end-object :eof)
+	       (reverse the-list)))))
+	       
 
 (test test-file-parsing
   (with-open-file (fstream (get-test-resource "large1.json"))

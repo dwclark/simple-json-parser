@@ -167,41 +167,103 @@
 	       (otherwise (vector-push-extend current ret))))
 	finally (return ret)))
 
-(defmacro define-json-decoder (name &key (type 'simple-string))
-  (let ((type-expr (case type
-		     (simple-string 'str-parser)
-		     (stream 'stm-parser)))
+(defmacro define-json-decoder (name &key (input-type 'simple-string) (output-type :document))
+  (let* ((type-expr (case input-type
+		      (simple-string 'str-parser)
+		      (stream 'stm-parser)))
+	 
+	 (construct-expr (case input-type
+			   (simple-string `(make-str-parser :read-buffer src :pos 0))
+			   (stream `(let ((tmp (make-stm-parser :stm src)))
+				      (stm-parser-move-next tmp)
+				      tmp))))
+	 (pos-expr (case input-type
+		     (simple-string `(str-parser-pos my-parser))
+		     (stream `(stm-parser-pos my-parser))))
+	 
+	 (read-buffer-expr (case input-type
+			     (simple-string `(str-parser-read-buffer my-parser))
+			     (stream `(stm-parser-read-buffer my-parser))))
+	 
+	 (reset-buffer-expr (case input-type
+			      (simple-string 'nil)
+			      (stream `(stm-parser-reset my-parser))))
+	 
+	 (move-next-expr (case input-type
+			   (simple-string `(str-parser-move-next my-parser))
+			   (stream `(stm-parser-move-next my-parser))))
+	 
+	 (current-expr (case input-type
+			 (simple-string `(str-parser-current my-parser))
+			 (stream `(stm-parser-current my-parser))))
+	 
+	 (next-expr (case input-type
+		      (simple-string `(str-parser-next my-parser))
+		      (stream `(stm-parser-next my-parser))))
 
-	(construct-expr (case type
-			  (simple-string `(make-str-parser :read-buffer src :pos 0))
-			  (stream `(let ((tmp (make-stm-parser :stm src)))
-				     (stm-parser-move-next tmp)
-				     tmp))))
-	(pos-expr (case type
-		    (simple-string `(str-parser-pos my-parser))
-		    (stream `(stm-parser-pos my-parser))))
-	
-	(read-buffer-expr (case type
-			    (simple-string `(str-parser-read-buffer my-parser))
-			    (stream `(stm-parser-read-buffer my-parser))))
-	
-	(reset-buffer-expr (case type
-			     (simple-string 'nil)
-			     (stream `(stm-parser-reset my-parser))))
-	
-	(move-next-expr (case type
-			  (simple-string `(str-parser-move-next my-parser))
-			  (stream `(stm-parser-move-next my-parser))))
+	 (true-event-expr (case output-type
+			    (:document `(json-stack-push stack :true))
+			    (:event `(funcall processor evt start end))))
+
+	 (false-event-expr (case output-type			     
+			     (:document `(json-stack-push stack :false))
+			     (:event `(funcall processor evt start end))))
+
+	 (null-event-expr (case output-type
+			    (:document `(json-stack-push stack :null))
+			    (:event `(funcall processor evt start end))))
+
+	 (integer-event-expr (case output-type
+			       (:document `(json-stack-push stack (parse-integer ,read-buffer-expr :start start :end (1+ end))))
+			       (:event `(funcall processor evt start end))))
+
+	 (float-event-expr (case output-type
+			     (:document `(json-stack-push stack (read-from-string ,read-buffer-expr t #\Nul :start start :end (1+ end))))
+			     (:event `(funcall processor evt start end))))
+
+	 (string-event-expr (case output-type
+			      (:document `(json-stack-push stack (subseq ,read-buffer-expr (1+ start) end)))
+			      (:event `(funcall processor evt start end))))
+	 
+	 (escaped-string-event-expr (case output-type
+				      (:document `(json-stack-push stack (json-string-unencode ,read-buffer-expr (1+ start) end)))
+				      (:event `(funcall processor evt start end))))
+
+	 (start-object-event-expr (case output-type
+				    (:document `(json-stack-push-object stack))
+				    (:event `(funcall processor evt start end))))
+
+	 (end-key-event-expr (case output-type
+			       (:document `(json-stack-validate-key stack))
+			       (:event `(funcall processor evt start end))))
 			
-	(current-expr (case type
-			(simple-string `(str-parser-current my-parser))
-			(stream `(stm-parser-current my-parser))))
-	
-	(next-expr (case type
-		     (simple-string `(str-parser-next my-parser))
-		     (stream `(stm-parser-next my-parser)))))
+	 (end-item-event-expr (case output-type
+				(:document `(json-stack-pop-item stack))
+				(:event `(funcall processor evt start end))))
+
+	 (end-object-event-expr (case output-type
+				  (:document `(json-stack-pop-object stack))
+				  (:event `(funcall processor evt start end))))
+
+	 (start-array-event-expr (case output-type
+				   (:document `(json-stack-push-array stack))
+				   (:event `(funcall processor evt start end))))
+
+	 (end-array-event-expr (case output-type
+				 (:document `(json-stack-pop-array stack))
+				 (:event `(funcall processor evt start end))))
+
+	 (eof-event-expr (case output-type
+			   (:document `(if (zerop (json-stack-location stack))
+					   (return (json-stack-pop stack))
+					   (error "unexpected eof")))
+			   (:event `(progn
+				      (funcall processor evt start end)
+				      (return nil)))))
+
+	 )
     
-    `(defun ,name (src)
+    `(defun ,name (src &optional processor)
        (declare (optimize (speed 3) (debug 0) (safety 0)))
        (let* ((stack (make-json-stack))
 	      (*read-default-float-format* 'double-float)
@@ -309,45 +371,37 @@
 		      (declare (type symbol evt))
 		      (declare (type fixnum start end))
 		      (ecase evt
-			(:true (json-stack-push stack :true))
-			(:false (json-stack-push stack :false))
-			(:null (json-stack-push stack :null))
+			(:true ,true-event-expr)
+			(:false ,false-event-expr)
+			(:null ,null-event-expr)
 			
 			(:integer
-			 (json-stack-push stack (parse-integer ,read-buffer-expr :start start :end (1+ end)))
+			 ,integer-event-expr
 			 ,reset-buffer-expr)
 			
 			(:float
-			 (json-stack-push stack (read-from-string ,read-buffer-expr t #\Nul :start start :end (1+ end)))
+			 ,float-event-expr
 			 ,reset-buffer-expr)
 			
 			(:string
-			 (json-stack-push stack (subseq ,read-buffer-expr (1+ start) end))
+			 ,string-event-expr
 			 ,reset-buffer-expr)
 			
 			(:escaped-string
-			 (json-stack-push stack (json-string-unencode ,read-buffer-expr (1+ start) end))
+			 ,escaped-string-event-expr
 			 ,reset-buffer-expr)
 			
-			(:start-object
-			 (json-stack-push-object stack))
+			(:start-object ,start-object-event-expr)
 			
-			(:end-key
-			 (json-stack-validate-key stack))
+			(:end-key ,end-key-event-expr)
 			
-			(:end-item
-			 (json-stack-pop-item stack))
+			(:end-item ,end-item-event-expr)
 			
-			(:end-object
-			 (json-stack-pop-object stack))
+			(:end-object ,end-object-event-expr)
 			
-			(:start-array
-			 (json-stack-push-array stack))
+			(:start-array ,start-array-event-expr)
 			
-			(:end-array
-			 (json-stack-pop-array stack))
+			(:end-array ,end-array-event-expr)
 			
-			(:eof
-			 (if (zerop (json-stack-location stack))
-			     (return (json-stack-pop stack))
-			     (error "unexpected eof")))))))))))
+			(:eof ,eof-event-expr)))))))))
+
